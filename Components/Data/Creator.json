@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Steph Jobs",
+    "job": "Artist",
+    "image": "../assets/images/users/01.png"
+  },
+  {
+    "name": "Andry Moray",
+    "job": "Artist",
+    "image": "../assets/images/users/02.png"
+  },
+  {
+    "name": "Zaid Ed",
+    "job": "Artist",
+    "image": "../assets/images/users/03.png"
+  },
+  {
+    "name": "Laila Ed",
+    "job": "Artist",
+    "image": "../assets/images/users/04.png"
+  },
+  {
+    "name": "John Clark",
+    "job": "Artist",
+    "image": "../assets/images/users/05.png"
+  },
+  {
+    "name": "Harry Nikon",
+    "job": "Artist",
+    "image": "../assets/images/users/06.png"
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "eventId": 1,
+    "name": "Tech Conference 2024",
+    "date": "March 15, 2024",
+    "location": "San Francisco, CA",
+    "price": 0.05,
+    "currency": "ETH",
+    "totalTickets": 500,
+    "ticketsLeft": 150,
+    "image": "https://via.placeholder.com/400x200.png?text=Tech+Conference+2024",
+    "description": "A conference bringing together the latest in tech."
+  },
+  {
+    "eventId": 2,
+    "name": "Music Festival",
+    "date": "April 20, 2024",
+    "location": "Austin, TX",
+    "price": 0.12,
+    "currency": "ETH",
+    "totalTickets": 1000,
+    "ticketsLeft": 0,
+    "image": "https://via.placeholder.com/400x200.png?text=Music+Festival",
+    "description": "A music festival featuring top artists and bands."
+  },
+  {
+    "eventId": 3,
+    "name": "Art Exhibition",
+    "date": "May 5, 2024",
+    "location": "New York, NY",
+    "price": 0.03,
+    "currency": "ETH",
+    "totalTickets": 100,
+    "ticketsLeft": 80,
+    "image": "https://via.placeholder.com/400x200.png?text=Art+Exhibition",
+    "description": "Showcasing modern and classic works from various artists."
+  }
+]
