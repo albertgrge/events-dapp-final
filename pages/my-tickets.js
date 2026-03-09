@@ -1,0 +1,300 @@
+import React, { useState, useEffect } from "react";
+import Head from "next/head";
+import Link from "next/link";
+import { ethers } from "ethers";
+import { QRCodeCanvas } from "qrcode.react";
+import { useStateContext } from "../Context/index";
+import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS } from "../Context/constants";
+import { useEthersProvider, useEthersSigner } from "../provider/hooks";
+import Loader from "../Components/Loader";
+
+export default function MyTicketsPage() {
+    const {
+        address,
+        isConnected,
+        loader,
+        LIST_FOR_RESALE,
+        CANCEL_RESALE,
+        GET_TICKET_STATUS,
+    } = useStateContext();
+
+    const provider = useEthersProvider();
+    const signer = useEthersSigner();
+    const [tickets, setTickets] = useState([]);
+    const [activeTab, setActiveTab] = useState("active");
+    const [loading, setLoading] = useState(true);
+    const [resalePrice, setResalePrice] = useState("");
+    const [selectedToken, setSelectedToken] = useState(null);
+    // New state for signed QR data
+    const [qrDataMap, setQrDataMap] = useState({}); // { tokenId: { qrString, expiresAt } }
+
+    useEffect(() => {
+        if (address && provider) loadTickets();
+    }, [address, provider]);
+
+    const loadTickets = async () => {
+        if (!provider || !address) return;
+        setLoading(true);
+
+        try {
+            const contract = new ethers.Contract(NFTS_AIRDROP_ADDRESS, NFTS_AIRDROP_ABI, provider);
+            const balance = await contract.balanceOf(address);
+            const count = balance.toNumber();
+
+            // Scan recent token IDs to find user's tokens
+            const totalMinted = await contract.totalTicketsMinted();
+            const total = totalMinted.toNumber();
+
+            const userTickets = [];
+            for (let tokenId = 1; tokenId <= total; tokenId++) {
+                try {
+                    const owner = await contract.ownerOf(tokenId);
+                    if (owner.toLowerCase() === address.toLowerCase()) {
+                        const status = await GET_TICKET_STATUS(tokenId);
+                        const eventId = await contract.tokenToEvent(tokenId);
+                        const ev = await contract.events(eventId);
+                        const tokenURI = await contract.tokenURI(tokenId);
+
+                        userTickets.push({
+                            tokenId,
+                            eventId: eventId.toNumber(),
+                            eventName: ev.name,
+                            eventDate: ev.date.toNumber(),
+                            used: status?.used || false,
+                            listedForResale: status?.listedForResale || false,
+                            resalePrice: status?.resalePrice || null,
+                            tokenURI,
+                        });
+                    }
+                } catch (e) {
+                    // Token may not exist or be burned
+                }
+            }
+
+            setTickets(userTickets);
+        } catch (error) {
+            console.error("Error loading tickets:", error);
+        }
+        setLoading(false);
+    };
+
+    const filteredTickets = tickets.filter((t) => {
+        if (activeTab === "active") return !t.used && !t.listedForResale;
+        if (activeTab === "used") return t.used;
+        if (activeTab === "listed") return t.listedForResale;
+        return true;
+    });
+
+    const handleListForResale = async (tokenId) => {
+        if (!resalePrice || parseFloat(resalePrice) <= 0) return;
+        const success = await LIST_FOR_RESALE(tokenId, resalePrice);
+        if (success) {
+            setSelectedToken(null);
+            setResalePrice("");
+            await loadTickets();
+        }
+    };
+
+    const handleCancelListing = async (tokenId) => {
+        const success = await CANCEL_RESALE(tokenId);
+        if (success) await loadTickets();
+    };
+
+    const generateSignedQRData = async (ticket) => {
+        try {
+            if (!signer) throw new Error("Wallet signer not available");
+            const timestamp = Math.floor(Date.now() / 1000);
+            const message = `Validate ticket ${ticket.tokenId} at ${timestamp}`;
+            const signature = await signer.signMessage(message);
+            const payload = {
+                tokenId: ticket.tokenId,
+                eventId: ticket.eventId,
+                timestamp,
+                signature,
+                contractAddress: NFTS_AIRDROP_ADDRESS,
+                network: "sepolia",
+            };
+            return JSON.stringify(payload);
+        } catch (e) {
+            console.error("Failed to sign QR data:", e);
+            alert("Signing failed: " + (e.message || "Unknown error"));
+            return null;
+        }
+    };
+
+    if (!isConnected) {
+        return (
+            <div className="page container text-center" style={{ padding: 100 }}>
+                <h2>Connect Your Wallet</h2>
+                <p className="text-muted mt-4">Connect your wallet to view your tickets.</p>
+            </div>
+        );
+    }
+
+    return (
+        <>
+            <Head>
+                <title>My Tickets — EventTicketNFT</title>
+            </Head>
+
+            {loader && <Loader />}
+
+            <div className="page container">
+                <div className="page-header">
+                    <h1 className="page-title">My Tickets</h1>
+                    <p className="page-subtitle">Your NFT ticket collection</p>
+                </div>
+
+                {/* Tabs */}
+                <div className="tabs">
+                    {[
+                        { key: "active", label: "Active Tickets" },
+                        { key: "used", label: "Used Tickets" },
+                        { key: "listed", label: "Listed for Resale" },
+                    ].map((tab) => (
+                        <button
+                            key={tab.key}
+                            className={`tab ${activeTab === tab.key ? "active" : ""}`}
+                            onClick={() => setActiveTab(tab.key)}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+
+                {loading ? (
+                    <div className="text-center" style={{ padding: 60 }}>
+                        <div className="spinner" style={{ margin: "0 auto 16px" }}></div>
+                        <p className="text-muted">Loading your tickets...</p>
+                    </div>
+                ) : filteredTickets.length === 0 ? (
+                    <div className="card-glass text-center" style={{ padding: 60 }}>
+                        <p style={{ fontSize: "1.2rem", marginBottom: 8 }}>
+                            {activeTab === "active" ? "No active tickets" :
+                                activeTab === "used" ? "No used tickets" : "No listings"}
+                        </p>
+                        <p className="text-muted">
+                            {activeTab === "active" && (
+                                <Link href="/events" style={{ color: "var(--accent-purple)" }}>Browse events to get started →</Link>
+                            )}
+                        </p>
+                    </div>
+                ) : (
+                    <div className="grid-2">
+                        {filteredTickets.map((ticket) => (
+                            <div key={ticket.tokenId} className="card ticket-card" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                                <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
+                                    <div className="ticket-card-thumb"></div>
+                                    <div className="ticket-card-info">
+                                        <h3 style={{ marginBottom: 4 }}>{ticket.eventName}</h3>
+                                        <p className="text-muted text-sm">
+                                            📅 {new Date(ticket.eventDate * 1000).toLocaleDateString()} &bull; Token #{ticket.tokenId}
+                                        </p>
+                                        <div style={{ marginTop: 8 }}>
+                                            {ticket.used ? (
+                                                <span className="badge badge-danger">Used</span>
+                                            ) : ticket.listedForResale ? (
+                                                <span className="badge badge-warning">Listed — {ticket.resalePrice} ETH</span>
+                                            ) : (
+                                                <span className="badge badge-success">Valid</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* QR Code - Signed & Time-Limited */}
+                                {!ticket.used && (
+                                    <div style={{ marginTop: 16, padding: 20, background: "rgba(255,255,255,0.03)", borderRadius: "var(--radius-md)", textAlign: "center" }}>
+                                        {!qrDataMap[ticket.tokenId] ? (
+                                            <button
+                                                className="btn btn-primary"
+                                                onClick={async () => {
+                                                    const qrString = await generateSignedQRData(ticket);
+                                                    if (qrString) {
+                                                        setQrDataMap(prev => ({
+                                                            ...prev,
+                                                            [ticket.tokenId]: {
+                                                                qrString,
+                                                                expiresAt: Math.floor(Date.now() / 1000) + 60
+                                                            }
+                                                        }));
+                                                        // Auto-clear after 65 seconds
+                                                        setTimeout(() => {
+                                                            setQrDataMap(prev => {
+                                                                const next = { ...prev };
+                                                                delete next[ticket.tokenId];
+                                                                return next;
+                                                            });
+                                                        }, 65000);
+                                                    }
+                                                }}
+                                            >
+                                                🔐 Show Secure QR
+                                            </button>
+                                        ) : (
+                                            <>
+                                                <div style={{ background: "#fff", padding: 12, borderRadius: 8, display: "inline-block" }}>
+                                                    <QRCodeCanvas
+                                                        value={qrDataMap[ticket.tokenId].qrString}
+                                                        size={220}
+                                                        level="H"
+                                                        includeMargin={true}
+                                                    />
+                                                </div>
+                                                <p className="text-sm" style={{ marginTop: 8, color: "var(--accent-purple)", fontWeight: 600 }}>
+                                                    ⏱ Expires in ~60s — screenshot won't work!
+                                                </p>
+                                            </>
+                                        )}
+                                        <p className="text-sm text-muted" style={{ marginTop: 12 }}>Scan at the gate for entry</p>
+                                        <p style={{ fontFamily: "monospace", fontSize: "0.65rem", color: "var(--text-muted)", marginTop: 4 }}>
+                                            Token #{ticket.tokenId} · Event #{ticket.eventId}
+                                        </p>
+                                    </div>
+                                )}
+
+                                {/* Actions */}
+                                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                                    {!ticket.used && !ticket.listedForResale && (
+                                        <>
+                                            {selectedToken === ticket.tokenId ? (
+                                                <div style={{ display: "flex", gap: 8, flex: 1 }}>
+                                                    <input
+                                                        type="number"
+                                                        className="form-input"
+                                                        placeholder="Price in ETH"
+                                                        value={resalePrice}
+                                                        onChange={(e) => setResalePrice(e.target.value)}
+                                                        style={{ flex: 1 }}
+                                                    />
+                                                    <button className="btn btn-primary btn-sm" onClick={() => handleListForResale(ticket.tokenId)}>
+                                                        List
+                                                    </button>
+                                                    <button className="btn btn-outline btn-sm" onClick={() => setSelectedToken(null)}>
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <button className="btn btn-outline btn-sm" onClick={() => setSelectedToken(ticket.tokenId)}>
+                                                    List for Resale
+                                                </button>
+                                            )}
+                                        </>
+                                    )}
+                                    {ticket.listedForResale && (
+                                        <button className="btn btn-danger btn-sm" onClick={() => handleCancelListing(ticket.tokenId)}>
+                                            Cancel Listing
+                                        </button>
+                                    )}
+                                    <Link href={`/event/${ticket.eventId}`} className="btn btn-outline btn-sm">
+                                        View Event
+                                    </Link>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </>
+    );
+}

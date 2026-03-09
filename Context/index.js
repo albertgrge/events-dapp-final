@@ -1,22 +1,10 @@
-import React, {
-  useMemo,
-  useState,
-  useContext,
-  createContext,
-  useEffect,
-} from "react";
+import React, { useState, useContext, createContext, useEffect } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { BigNumber, ethers } from "ethers";
+import { ethers } from "ethers";
 import { config } from "../Context/wagmiConfigs";
-
-import { useAccount, useBalance, useChains } from "wagmi";
-
-import {
-  NFTS_AIRDROP_ABI,
-  NFTS_AIRDROP_ADDRESS,
-  parseErrorMsg,
-} from "./constants";
+import { useAccount, useChains } from "wagmi";
+import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS, parseErrorMsg } from "./constants";
 import { useEthersProvider, useEthersSigner } from "../provider/hooks";
 
 const StateContext = createContext();
@@ -31,273 +19,153 @@ export const StateContextProvider = ({ children }) => {
 
   const [loader, setLoader] = useState(false);
   const [userRole, setUserRole] = useState({
-    isAdmin: false,
     isOrganizer: false,
     isUser: true,
   });
-  const [adminAddress, setAdminAddress] = useState(null);
+  const [organizerStake, setOrganizerStake] = useState("0");
 
-  const { address, isConnected } = useAccount({
-    config: config,
-  });
+  const { address, isConnected } = useAccount({ config });
 
-  // Fetch user role on address change
+  // ── Helper: get read-only contract ──
+  const getReadContract = () => {
+    const readProvider = provider || new ethers.providers.JsonRpcProvider("https://rpc.sepolia.org");
+    return new ethers.Contract(NFTS_AIRDROP_ADDRESS, NFTS_AIRDROP_ABI, readProvider);
+  };
+
+  // ── Helper: get writable contract ──
+  const getWriteContract = () => {
+    if (!signer) return null;
+    return new ethers.Contract(NFTS_AIRDROP_ADDRESS, NFTS_AIRDROP_ABI, signer);
+  };
+
+  // ============================================================
+  // ROLE CHECKING  (no admin — just organizer vs user)
+  // ============================================================
+
   useEffect(() => {
     if (address && provider) {
       checkUserRole();
     }
   }, [address, provider]);
 
-  // Check user role based on smart contract data
+  useEffect(() => {
+    if (address) {
+      const timer = setTimeout(() => {
+        checkUserRole();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [address]);
+
   const checkUserRole = async () => {
     try {
       if (!address || !provider) return;
+      const contract = getReadContract();
+      if (!contract) return;
 
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        provider
-      );
+      let isOrganizer = false;
+      let stake = "0";
 
-      // Get admin address from contract
-      const contractAdmin = await contract.admin();
-      setAdminAddress(contractAdmin);
-
-      // Check if user is admin
-      const isAdmin = address.toLowerCase() === contractAdmin.toLowerCase();
-
-      // Check if user is an event organizer
-      const organizerEvents = await contract.getOrganizerEvents(address);
-      const isOrganizer = organizerEvents.length > 0;
-
-      setUserRole({
-        isAdmin,
-        isOrganizer,
-        isUser: !isAdmin && !isOrganizer, // Regular user if not admin or organizer
-      });
-
-      console.log('User Role:', {
-        address,
-        isAdmin,
-        isOrganizer,
-        eventsCreated: organizerEvents.length,
-      });
-    } catch (error) {
-      console.error('Error checking user role:', error);
-    }
-  };
-
-  // Helper function to get admin address
-  const getAdminAddress = async () => {
-    try {
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        provider
-      );
-      return await contract.admin();
-    } catch (error) {
-      console.error('Error getting admin address:', error);
-      return null;
-    }
-  };
-
-  // Helper function to check if current user is admin
-  const isCurrentUserAdmin = () => {
-    return userRole.isAdmin;
-  };
-
-  // Helper function to check if current user is organizer
-  const isCurrentUserOrganizer = () => {
-    return userRole.isOrganizer;
-  };
-
-  // Get organizer's events
-  const GET_ORGANIZER_EVENTS = async (organizerAddress = address) => {
-    try {
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        provider
-      );
-
-      const eventIds = await contract.getOrganizerEvents(organizerAddress);
-
-      // Fetch full event details
-      const events = await Promise.all(
-        eventIds.map(async (eventId) => {
-          const event = await contract.getEvent(eventId);
-          return {
-            eventId: event.eventId.toNumber(),
-            name: event.eventName,
-            organizer: event.organizer,
-            price: parseFloat(ethers.utils.formatEther(event.ticketPrice)),
-            currency: 'ETH',
-            totalTickets: event.totalTickets.toNumber(),
-            ticketsLeft: event.totalTickets.toNumber() - event.ticketsSold.toNumber(),
-            ticketsSold: event.ticketsSold.toNumber(),
-            isActive: event.isActive,
-          };
-        })
-      );
-
-      return events;
-    } catch (error) {
-      console.error('Error fetching organizer events:', error);
-      return [];
-    }
-  };
-
-  // Get platform statistics (admin only)
-  const GET_PLATFORM_STATS = async () => {
-    try {
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        provider
-      );
-
-      const allEvents = await contract.getAllEvents();
-
-      let totalRevenue = 0;
-      let totalTicketsSold = 0;
-      let activeEvents = 0;
-
-      allEvents.forEach((event) => {
-        const ticketsSold = event.ticketsSold.toNumber();
-        const ticketPrice = parseFloat(ethers.utils.formatEther(event.ticketPrice));
-
-        totalTicketsSold += ticketsSold;
-        totalRevenue += ticketsSold * ticketPrice;
-
-        if (event.isActive) activeEvents++;
-      });
-
-      return {
-        totalEvents: allEvents.length,
-        activeEvents,
-        totalTicketsSold,
-        totalRevenue,
-        mintFee: parseFloat(ethers.utils.formatEther(await contract.mintFee())),
-      };
-    } catch (error) {
-      console.error('Error fetching platform stats:', error);
-      return null;
-    }
-  };
-
-
-  const CREATE_NFT = async (nft) => {
-    try {
-      const { IPFS_URL, name } = nft;
-      setLoader(true);
-
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        signer
-      );
-      const listingPrice = await contract.mintFee();
-      const transaction = await contract.mint(IPFS_URL, name, {
-        value: listingPrice.toString(),
-      });
-
-      const receipt = await transaction.wait();
-
-      const message = "NFT Mint Successfully";
-
-      setLoader(false);
-      notifySuccess("Successfully created");
-      window.location.reload();
-    } catch (error) {
-      setLoader(false);
-      const errorMessage = parseErrorMsg(error);
-      notifyError(errorMessage);
-    }
-  };
-
-  // Upload to IPFS using Pinata (or fallback to base64 data URL for testing)
-  const uploadToIPFS = async (file) => {
-    try {
-      // For now, we'll use a simple approach with base64 data URLs
-      // In production, you should use Pinata or another IPFS service
-      if (typeof file === 'string' && file.startsWith('data:')) {
-        // Already a data URL, return as is
-        return file;
+      try {
+        isOrganizer = await contract.isActiveOrganizer(address);
+      } catch (e) {
+        console.log("isActiveOrganizer check failed:", e.message);
       }
 
-      // If you have Pinata API keys, uncomment and use this:
-      /*
-      const formData = new FormData();
-      formData.append('file', file);
-      
-      const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
-      const pinataSecretKey = process.env.NEXT_PUBLIC_PINATA_SECRET_KEY;
-      
-      const response = await axios.post(
-        'https://api.pinata.cloud/pinning/pinFileToIPFS',
-        formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-            pinata_api_key: pinataApiKey,
-            pinata_secret_api_key: pinataSecretKey,
-          },
-        }
-      );
-      
-      return `https://gateway.pinata.cloud/ipfs/${response.data.IpfsHash}`;
-      */
+      try {
+        const stakeWei = await contract.getOrganizerStake(address);
+        stake = ethers.utils.formatEther(stakeWei);
+      } catch (e) {
+        console.log("getOrganizerStake check failed:", e.message);
+      }
 
-      return file;
+      setUserRole({
+        isOrganizer,
+        isUser: !isOrganizer,
+      });
+      setOrganizerStake(stake);
+
+      console.log("Role set — isOrganizer:", isOrganizer, "stake:", stake, "ETH");
     } catch (error) {
-      console.error('IPFS upload error:', error);
-      throw error;
+      console.error("Error checking user role:", error);
     }
   };
 
-  const uploadJSONToIPFS = async (jsonData) => {
+  // ============================================================
+  // STAKING — BECOME / LEAVE ORGANIZER
+  // ============================================================
+
+  const STAKE_TO_BECOME_ORGANIZER = async (name, contact, stakeEth) => {
     try {
-      // For testing, we'll create a data URL with JSON
-      const jsonString = JSON.stringify(jsonData);
-      const dataUrl = `data:application/json;base64,${btoa(jsonString)}`;
+      setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
 
-      // If you have Pinata API keys, uncomment and use this:
-      /*
-      const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_API_KEY;
-      const pinataSecretKey = process.env.NEXT_PUBLIC_PINATA_SECRET_KEY;
-      
-      const response = await axios.post(
-        'https://api.pinata.cloud/pinning/pinJSONToIPFS',
-        jsonData,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            pinata_api_key: pinataApiKey,
-            pinata_secret_api_key: pinataSecretKey,
-          },
-        }
-      );
-      
-      return `https://gateway.pinata.cloud/ipfs/${response.data.IpfsHash}`;
-      */
+      const stakeWei = ethers.utils.parseEther(stakeEth.toString());
+      const tx = await contract.stakeToBeOrganizer(name, contact, {
+        value: stakeWei,
+      });
+      await tx.wait();
 
-      return dataUrl;
+      await checkUserRole();
+      setLoader(false);
+      notifySuccess("🎉 You are now an organizer!");
+      return true;
     } catch (error) {
-      console.error('JSON IPFS upload error:', error);
-      throw error;
+      setLoader(false);
+      notifyError(parseErrorMsg(error) || "Failed to stake");
+      return false;
     }
   };
+
+  const UNSTAKE = async () => {
+    try {
+      setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
+
+      const tx = await contract.unstake();
+      await tx.wait();
+
+      await checkUserRole();
+      setLoader(false);
+      notifySuccess("Unstaked! You are no longer an organizer.");
+      return true;
+    } catch (error) {
+      setLoader(false);
+      notifyError(parseErrorMsg(error) || "Failed to unstake");
+      return false;
+    }
+  };
+
+  const GET_MIN_STAKE = async () => {
+    try {
+      const contract = getReadContract();
+      if (!contract) return "0.01";
+      const minStake = await contract.MIN_STAKE();
+      return ethers.utils.formatEther(minStake);
+    } catch (e) {
+      return "0.01";
+    }
+  };
+
+  // ============================================================
+  // EVENT CREATION (Organizer only)
+  // ============================================================
 
   const CREATE_EVENT = async (eventData) => {
     try {
-      const { name, description, date, location, price, totalTickets, image } = eventData;
+      const { name, description, date, location, price, totalTickets, image, royaltyPercent, maxResaleMultiplier, maxPerWallet } = eventData;
       setLoader(true);
 
-      // Upload image to IPFS
+      if (!signer) {
+        setLoader(false);
+        notifyError("Please connect your wallet first");
+        throw new Error("Wallet not connected");
+      }
+
       const imageUrl = await uploadToIPFS(image);
 
-      // Create metadata object
       const metadata = {
         name,
         description,
@@ -305,261 +173,455 @@ export const StateContextProvider = ({ children }) => {
         location,
         image: imageUrl,
         attributes: [
-          { trait_type: 'Event Date', value: date },
-          { trait_type: 'Location', value: location },
-          { trait_type: 'Ticket Price', value: `${price} ETH` },
+          { trait_type: "Event Date", value: date },
+          { trait_type: "Location", value: location },
+          { trait_type: "Ticket Price", value: `${price} ETH` },
         ],
       };
 
-      // Upload metadata to IPFS
       const metadataUrl = await uploadJSONToIPFS(metadata);
 
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        signer
-      );
-
-      // Convert price to wei
+      const contract = getWriteContract();
       const priceInWei = ethers.utils.parseEther(price.toString());
+      const dateTimestamp = Math.floor(new Date(date).getTime() / 1000);
+      const royaltyBps = Math.floor((royaltyPercent || 10) * 100);
+      const multiplier = maxResaleMultiplier || 2;
+      const perWalletLimit = maxPerWallet || 1;
 
-      // Call smart contract createEvent function
-      const transaction = await contract.createEvent(
-        priceInWei,
+      const tx = await contract.createEvent(
         name,
-        parseInt(totalTickets)
+        description || "",
+        dateTimestamp,
+        priceInWei,
+        parseInt(totalTickets),
+        royaltyBps,
+        multiplier,
+        metadataUrl,
+        perWalletLimit
       );
 
-      const receipt = await transaction.wait();
+      const receipt = await tx.wait();
 
-      // Get the event ID from the transaction
-      const eventId = receipt.events?.find(e => e.event === 'EventCreated')?.args?.eventId?.toNumber() ||
-        await contract._eventIds.current().then(id => id.toNumber());
+      let eventId;
+      try {
+        const iface = new ethers.utils.Interface(NFTS_AIRDROP_ABI);
+        for (const log of receipt.logs) {
+          try {
+            const parsed = iface.parseLog(log);
+            if (parsed.name === "EventCreated") {
+              eventId = parsed.args.eventId.toNumber();
+              break;
+            }
+          } catch (e) { }
+        }
+      } catch (e) {
+        console.error("Error parsing event ID:", e);
+      }
+
+      if (!eventId) {
+        const counter = await contract.eventCounter();
+        eventId = counter.toNumber();
+      }
 
       setLoader(false);
-      notifySuccess('Event created successfully!');
-
-      // Return the created event data
-      return {
-        eventId,
-        name,
-        description,
-        date,
-        location,
-        price,
-        currency: 'ETH',
-        totalTickets: parseInt(totalTickets),
-        ticketsLeft: parseInt(totalTickets),
-        image: imageUrl,
-        IPFS_URL: metadataUrl,
-      };
+      notifySuccess("Event created successfully!");
+      return { eventId, ...eventData, image: imageUrl, IPFS_URL: metadataUrl };
     } catch (error) {
       setLoader(false);
-      const errorMessage = parseErrorMsg(error);
-      notifyError(errorMessage);
+      notifyError(parseErrorMsg(error) || "Failed to create event");
       throw error;
     }
   };
 
+  // ============================================================
+  // GET ALL EVENTS
+  // ============================================================
+
   const GET_ALL_EVENTS = async () => {
     try {
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        provider
-      );
+      const contract = getReadContract();
+      if (!contract) return [];
 
-      const events = await contract.getAllEvents();
+      const totalEvents = await contract.eventCounter();
+      const count = totalEvents.toNumber();
+      if (count === 0) return [];
 
-      const formattedEvents = await Promise.all(
-        events.map(async (event) => {
-          try {
-            // Try to fetch metadata if available
-            let metadata = {};
+      const eventPromises = [];
+      for (let i = 1; i <= count; i++) {
+        eventPromises.push(
+          (async (id) => {
+            try {
+              const ev = await contract.events(id);
+              const stats = await contract.eventStats(id);
 
-            return {
-              eventId: event.eventId.toNumber(),
-              name: event.eventName,
-              organizer: event.organizer,
-              price: parseFloat(ethers.utils.formatEther(event.ticketPrice)),
-              currency: 'ETH',
-              totalTickets: event.totalTickets.toNumber(),
-              ticketsLeft: event.totalTickets.toNumber() - event.ticketsSold.toNumber(),
-              ticketsSold: event.ticketsSold.toNumber(),
-              isActive: event.isActive,
-              description: metadata.description || 'Blockchain event',
-              date: metadata.date || 'TBA',
-              location: metadata.location || 'TBA',
-              image: metadata.image || 'https://via.placeholder.com/400x200.png?text=Event',
-            };
-          } catch (error) {
-            console.error('Error formatting event:', error);
-            return null;
-          }
-        })
-      );
+              let meta = {};
+              const metadataURI = ev.metadataURI;
+              if (metadataURI && metadataURI.length > 0) {
+                try {
+                  const res = await fetch(metadataURI);
+                  if (res.ok) {
+                    meta = await res.json();
+                  }
+                } catch (fetchErr) {
+                  console.warn(`Failed to fetch metadata for event ${id}:`, fetchErr.message);
+                }
+              }
 
-      return formattedEvents.filter(e => e !== null && e.isActive);
+              return {
+                eventId: ev.eventId.toNumber(),
+                name: ev.name,
+                description: ev.description || meta.description || "",
+                date: ev.date.toNumber(),
+                organizer: ev.organizer,
+                ticketPrice: parseFloat(ethers.utils.formatEther(ev.ticketPrice)),
+                maxSupply: ev.maxSupply.toNumber(),
+                ticketsMinted: ev.ticketsMinted.toNumber(),
+                ticketsLeft: ev.maxSupply.toNumber() - ev.ticketsMinted.toNumber(),
+                royaltyBps: ev.royaltyBps.toNumber(),
+                maxResaleMultiplier: ev.maxResaleMultiplier.toNumber(),
+                maxPerWallet: ev.maxPerWallet.toNumber(),
+                totalMinted: stats.totalMinted.toNumber(),
+                totalValidated: stats.totalValidated.toNumber(),
+                totalRevenue: parseFloat(ethers.utils.formatEther(stats.totalRevenue)),
+                totalResales: stats.totalResales.toNumber(),
+                location: meta.location || "TBA",
+                image: meta.image || null,
+                metadataUrl: metadataURI || "",
+              };
+            } catch (e) {
+              console.error(`Error fetching event ${id}:`, e);
+              return null;
+            }
+          })(i)
+        );
+      }
+
+      const events = await Promise.all(eventPromises);
+      return events.filter((e) => e !== null);
     } catch (error) {
-      console.error('Error fetching events:', error);
+      console.error("Error fetching events:", error);
       return [];
     }
   };
 
-  const MINT_TICKET = async (eventData) => {
+  // ============================================================
+  // MINT TICKET
+  // ============================================================
+
+  const MINT_TICKET = async (eventId, tokenURI) => {
     try {
-      const { eventId, ticketPrice, IPFS_URL, name } = eventData;
       setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
 
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        signer
-      );
+      const ev = await contract.events(eventId);
+      const ticketPrice = ev.ticketPrice;
 
-      // Convert ticket price to wei (assuming ticketPrice is in ETH)
-      const priceInWei = ethers.utils.parseEther(ticketPrice.toString());
+      const tx = await contract.mintTicket(eventId, tokenURI, {
+        value: ticketPrice,
+      });
+      const receipt = await tx.wait();
 
-      const transaction = await contract.mintTicket(
-        eventId,
-        IPFS_URL,
-        name,
-        {
-          value: priceInWei,
+      let tokenId;
+      try {
+        const iface = new ethers.utils.Interface(NFTS_AIRDROP_ABI);
+        for (const log of receipt.logs) {
+          try {
+            const parsed = iface.parseLog(log);
+            if (parsed.name === "TicketMinted") {
+              tokenId = parsed.args.tokenId.toNumber();
+              break;
+            }
+          } catch (e) { }
         }
-      );
-
-      const receipt = await transaction.wait();
+      } catch (e) { }
 
       setLoader(false);
-      notifySuccess("Ticket purchased successfully!");
-      window.location.reload();
+      notifySuccess("Ticket minted successfully!");
+      return tokenId;
     } catch (error) {
       setLoader(false);
-      const errorMessage = parseErrorMsg(error);
-      notifyError(errorMessage);
+      notifyError(parseErrorMsg(error) || "Failed to mint ticket");
+      throw error;
     }
   };
 
-  const GET_USER_OWN_NFTS = async () => {
+  // ============================================================
+  // VALIDATE TICKET
+  // ============================================================
+
+  const VALIDATE_TICKET = async (tokenId) => {
     try {
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        signer
-      );
+      setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
 
-      const ownNFTs = await contract.fetchUserOwnedNFTs(address);
+      const tx = await contract.validateTicket(tokenId);
+      await tx.wait();
 
-      const nfts = await Promise.all(
-        ownNFTs.map(async ({ tokenId, creator, tokenURI }) => {
-          const {
-            data: { name, description, category, image, size, type },
-          } = await axios.get(tokenURI, {});
-
-          return {
-            name,
-            description,
-            category,
-            image,
-            tokenId: tokenId.toNumber(),
-            creator,
-            tokenURI,
-          };
-        })
-      );
-
-      return nfts;
+      setLoader(false);
+      notifySuccess(`Ticket #${tokenId} validated!`);
+      return true;
     } catch (error) {
-      console.log(error);
+      setLoader(false);
+      notifyError(parseErrorMsg(error) || "Validation failed");
+      return false;
     }
   };
 
-  const GET_USER_CREATED_NFTS = async () => {
+  // ============================================================
+  // REVENUE WITHDRAWAL
+  // ============================================================
+
+  const WITHDRAW_REVENUE = async (eventId) => {
     try {
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        signer
-      );
+      setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
 
-      const ownNFTs = await contract.fetchUserCreatedNFTs(address);
+      const tx = await contract.withdrawRevenue(eventId);
+      await tx.wait();
 
-      const nfts = await Promise.all(
-        ownNFTs.map(async ({ tokenId, creator, tokenURI }) => {
-          const {
-            data: { name, description, category, image, type },
-          } = await axios.get(tokenURI, {});
-
-          return {
-            name,
-            description,
-            category,
-            image,
-            tokenId: tokenId.toNumber(),
-            creator,
-            tokenURI,
-          };
-        })
-      );
-
-      return nfts;
+      setLoader(false);
+      notifySuccess("Revenue withdrawn!");
+      return true;
     } catch (error) {
-      console.log(error);
+      setLoader(false);
+      notifyError(parseErrorMsg(error) || "Withdrawal failed");
+      return false;
     }
   };
 
-  const ALL_NOTIFICATIONS = async () => {
+  // ============================================================
+  // RESALE MARKETPLACE
+  // ============================================================
+
+  const LIST_FOR_RESALE = async (tokenId, priceInEth) => {
     try {
-      const contract = new ethers.Contract(
-        NFTS_AIRDROP_ADDRESS,
-        NFTS_AIRDROP_ABI,
-        signer
-      );
+      setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
 
-      const notifications = await contract.GET_NOTIFICATIONS();
+      const priceWei = ethers.utils.parseEther(priceInEth.toString());
+      const tx = await contract.listTicketForResale(tokenId, priceWei);
+      await tx.wait();
 
-      const nfts = await Promise.all(
-        notifications.map(
-          async ({ id, userAddress, message, timestamp, nftID }) => {
-            return {
-              id: id.toNumber(),
-              userAddress,
-              message,
-              timestamp: timestamp.toNumber(),
-              nftID: nftID.toNumber(),
-            };
-          }
-        )
-      );
-
-      return nfts;
+      setLoader(false);
+      notifySuccess("Ticket listed for resale!");
+      return true;
     } catch (error) {
-      console.log(error);
+      setLoader(false);
+      notifyError(parseErrorMsg(error) || "Failed to list ticket");
+      return false;
     }
   };
+
+  const CANCEL_RESALE = async (tokenId) => {
+    try {
+      setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
+
+      const tx = await contract.cancelResaleListing(tokenId);
+      await tx.wait();
+
+      setLoader(false);
+      notifySuccess("Listing cancelled!");
+      return true;
+    } catch (error) {
+      setLoader(false);
+      notifyError(parseErrorMsg(error) || "Failed to cancel listing");
+      return false;
+    }
+  };
+
+  const BUY_RESALE = async (tokenId) => {
+    try {
+      setLoader(true);
+      const contract = getWriteContract();
+      if (!contract) throw new Error("Wallet not connected");
+
+      const listing = await contract.getResaleListing(tokenId);
+      const tx = await contract.buyResaleTicket(tokenId, {
+        value: listing.price,
+      });
+      await tx.wait();
+
+      setLoader(false);
+      notifySuccess("Resale ticket purchased!");
+      return true;
+    } catch (error) {
+      setLoader(false);
+      notifyError(parseErrorMsg(error) || "Failed to buy resale ticket");
+      return false;
+    }
+  };
+
+  // ============================================================
+  // VIEW FUNCTIONS
+  // ============================================================
+
+  const GET_PENDING_REVENUE = async (eventId) => {
+    try {
+      const contract = getReadContract();
+      if (!contract) return "0";
+      const revenue = await contract.getPendingRevenue(eventId);
+      return ethers.utils.formatEther(revenue);
+    } catch (e) {
+      return "0";
+    }
+  };
+
+  const GET_TICKET_STATUS = async (tokenId) => {
+    try {
+      const contract = getReadContract();
+      if (!contract) return null;
+      const used = await contract.ticketUsed(tokenId);
+      const eventId = await contract.tokenToEvent(tokenId);
+      const owner = await contract.ownerOf(tokenId);
+      const listing = await contract.getResaleListing(tokenId);
+      return {
+        tokenId,
+        used,
+        eventId: eventId.toNumber(),
+        owner,
+        listedForResale: listing.active,
+        resalePrice: listing.active ? ethers.utils.formatEther(listing.price) : null,
+      };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const GET_EVENT_STATS = async (eventId) => {
+    try {
+      const contract = getReadContract();
+      if (!contract) return null;
+      const stats = await contract.eventStats(eventId);
+      return {
+        totalMinted: stats.totalMinted.toNumber(),
+        totalValidated: stats.totalValidated.toNumber(),
+        totalRevenue: ethers.utils.formatEther(stats.totalRevenue),
+        totalResales: stats.totalResales.toNumber(),
+      };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const GET_TOTAL_TICKETS_MINTED = async () => {
+    try {
+      const contract = getReadContract();
+      if (!contract) return 0;
+      const total = await contract.totalTicketsMinted();
+      return total.toNumber();
+    } catch (e) {
+      return 0;
+    }
+  };
+
+  // ============================================================
+  // IPFS UPLOAD (Pinata)
+  // ============================================================
+
+  const uploadToIPFS = async (file) => {
+    try {
+      if (typeof file === "string" && file.startsWith("data:")) {
+        const response = await fetch(file);
+        const blob = await response.blob();
+        file = new File([blob], "event-image.jpg", { type: blob.type });
+      }
+
+      if (!file) return null;
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_AIP_KEY || "376d2889c6c19feefd9c";
+      const pinataSecretKey = process.env.NEXT_PUBLIC_PINATA_SECRECT_KEY || "db4b90e3cb4066cc243af5b7d8cc7ab549d7cd0bd63e7f3c970168aefd95f83f";
+
+      const res = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          pinata_api_key: pinataApiKey,
+          pinata_secret_api_key: pinataSecretKey,
+        },
+      });
+
+      return `https://gateway.pinata.cloud/ipfs/${res.data.IpfsHash}`;
+    } catch (error) {
+      console.error("IPFS upload error:", error);
+      notifyError("Failed to upload to IPFS");
+      throw error;
+    }
+  };
+
+  const uploadJSONToIPFS = async (jsonData) => {
+    try {
+      const pinataApiKey = process.env.NEXT_PUBLIC_PINATA_AIP_KEY || "376d2889c6c19feefd9c";
+      const pinataSecretKey = process.env.NEXT_PUBLIC_PINATA_SECRECT_KEY || "db4b90e3cb4066cc243af5b7d8cc7ab549d7cd0bd63e7f3c970168aefd95f83f";
+
+      const res = await axios.post("https://api.pinata.cloud/pinning/pinJSONToIPFS", jsonData, {
+        headers: {
+          "Content-Type": "application/json",
+          pinata_api_key: pinataApiKey,
+          pinata_secret_api_key: pinataSecretKey,
+        },
+      });
+
+      return `https://gateway.pinata.cloud/ipfs/${res.data.IpfsHash}`;
+    } catch (error) {
+      console.error("JSON IPFS upload error:", error);
+      throw error;
+    }
+  };
+
+  // ============================================================
+  // CONTEXT VALUE
+  // ============================================================
 
   return (
     <StateContext.Provider
       value={{
-        CREATE_NFT,
-        CREATE_EVENT,
-        MINT_TICKET,
-        GET_USER_OWN_NFTS,
-        GET_USER_CREATED_NFTS,
-        GET_ALL_EVENTS,
-        GET_ORGANIZER_EVENTS,
-        GET_PLATFORM_STATS,
-        ALL_NOTIFICATIONS,
-        checkUserRole,
-        getAdminAddress,
-        isCurrentUserAdmin,
-        isCurrentUserOrganizer,
+        // Roles
         userRole,
-        adminAddress,
-        loader,
+        checkUserRole,
         address,
+        isConnected,
+        loader,
         setLoader,
+        organizerStake,
+
+        // Staking
+        STAKE_TO_BECOME_ORGANIZER,
+        UNSTAKE,
+        GET_MIN_STAKE,
+
+        // Events
+        CREATE_EVENT,
+        GET_ALL_EVENTS,
+
+        // Tickets
+        MINT_TICKET,
+        VALIDATE_TICKET,
+
+        // Revenue
+        WITHDRAW_REVENUE,
+        GET_PENDING_REVENUE,
+
+        // Resale
+        LIST_FOR_RESALE,
+        CANCEL_RESALE,
+        BUY_RESALE,
+
+        // View
+        GET_TICKET_STATUS,
+        GET_EVENT_STATS,
+        GET_TOTAL_TICKETS_MINTED,
+
+        // IPFS
+        uploadToIPFS,
+        uploadJSONToIPFS,
       }}
     >
       {children}

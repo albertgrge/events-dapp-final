@@ -1,21 +1,11 @@
-import {
-  mainnet,
-  polygon,
-  optimism,
-  arbitrum,
-  base,
-  holesky,
-  sepolia,
-  baseSepolia,
-} from "wagmi/chains";
+import { sepolia } from "wagmi/chains";
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
-import { injected, metaMask, safe, walletConnect } from "wagmi/connectors";
 
-const projectId = process.env.NEXT_PUBLIC_WALLET_CONNECT;
+const projectId = process.env.NEXT_PUBLIC_WALLET_CONNECT || "fbe049d035d54590dd5935edc2a7d780";
 
 export const config = getDefaultConfig({
-  appName: "NFTS AirDrop",
+  appName: "EventTicketNFT",
   projectId: projectId,
-  chains: [baseSepolia],
+  chains: [sepolia],
   ssr: true,
 });

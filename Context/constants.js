@@ -1,14 +1,14 @@
 import axios from "axios";
 import toast from "react-hot-toast";
 
-import NFTsAirDrop from "./NFTsAirDrop.json";
+import EventTicketNFT from "./EventTicketNFT.json";
 
 const notifySuccess = (msg) => toast.success(msg, { duration: 2000 });
 const notifyError = (msg) => toast.error(msg, { duration: 2000 });
 
-export const NFTS_AIRDROP_ABI = NFTsAirDrop.abi;
-export const NFTS_AIRDROP_ADDRESS = process.env.NEXT_PUBLIC_NFTS_AIRDROP;
-export const CONTRACT_EXPLORER_URL = "https://sepolia.basescan.org/address/0xf02f081007a5C5c427F04bB11aDcC9fEe4de1c7F";
+export const NFTS_AIRDROP_ABI = EventTicketNFT;
+export const NFTS_AIRDROP_ADDRESS = process.env.NEXT_PUBLIC_NFTS_AIRDROP || "0xD4C2cCCF179AD4ecff76e5CaBDB22656ba0ebde2";
+export const CONTRACT_EXPLORER_URL = "https://sepolia.etherscan.io/address/0xD4C2cCCF179AD4ecff76e5CaBDB22656ba0ebde2";
 
 
 //PINATE API - SECRECT KEYS

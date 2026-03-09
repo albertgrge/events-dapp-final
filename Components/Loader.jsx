@@ -1,16 +1,16 @@
 import React from "react";
 
-export default function Loader({}) {
+const Loader = () => {
   return (
-    <div className="new-loader-wrapper">
-      <div className="new-wrapper">
-        <div className="new-circle"></div>
-        <div className="new-circle"></div>
-        <div className="new-circle"></div>
-        <div className="new-shadow"></div>
-        <div className="new-shadow"></div>
-        <div className="new-shadow"></div>
+    <div className="loader-overlay">
+      <div style={{ textAlign: "center" }}>
+        <div className="spinner"></div>
+        <p style={{ marginTop: 16, color: "var(--text-secondary)" }}>
+          Processing transaction...
+        </p>
       </div>
     </div>
   );
-}
+};
+
+export default Loader;
