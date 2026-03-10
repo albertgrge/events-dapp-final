@@ -3,6 +3,7 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { ethers } from "ethers";
 import { config } from "../Context/wagmiConfigs";
+import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
 import { useAccount, useChains } from "wagmi";
 import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS, parseErrorMsg } from "./constants";
 import { useEthersProvider, useEthersSigner } from "../provider/hooks";
@@ -10,8 +11,8 @@ import { useEthersProvider, useEthersSigner } from "../provider/hooks";
 const StateContext = createContext();
 
 export const StateContextProvider = ({ children }) => {
-  const notifySuccess = (msg) => toast.success(msg, { duration: 3000 });
-  const notifyError = (msg) => toast.error(msg, { duration: 5000 });
+  const notifySuccess = (msg) => toast.success(msg, { duration: 2000 });
+  const notifyError = (msg) => toast.error(msg, { duration: 2000 });
 
   const provider = useEthersProvider();
   const signer = useEthersSigner();
@@ -291,35 +292,57 @@ export const StateContextProvider = ({ children }) => {
   // ============================================================
 
   const MINT_TICKET = async (eventId, tokenURI) => {
+    let pendingToastId;
     try {
       setLoader(true);
 
-      // Guard: signer may take a moment to init on mobile WalletConnect
-      let contract = getWriteContract();
-      if (!contract) {
-        await new Promise((r) => setTimeout(r, 1500));
-        contract = getWriteContract();
-      }
-      if (!contract) {
-        setLoader(false);
-        notifyError("Wallet not ready — please reconnect and try again.");
-        throw new Error("Wallet not connected");
-      }
+      // ── 1. Read ticket price (read-only, no wallet needed) ─────────────────
+      const readContract = getReadContract();
+      const ev = await readContract.events(eventId);
+      const ticketPriceBN = ev.ticketPrice;                      // ethers BigNumber
+      const ticketPriceBig = BigInt(ticketPriceBN.toString());   // viem BigInt
 
-      const ev = await contract.events(eventId);
-      const ticketPrice = ev.ticketPrice;
-
-      const tx = await contract.mintTicket(eventId, tokenURI, {
-        value: ticketPrice,
+      // ── 2. Send tx via wagmi (always routes through connected wallet) ────
+      // This triggers the MetaMask / WalletConnect popup.
+      const txHash = await writeContract(config, {
+        address: NFTS_AIRDROP_ADDRESS,
+        abi: NFTS_AIRDROP_ABI,
+        functionName: "mintTicket",
+        args: [BigInt(eventId), tokenURI],
+        value: ticketPriceBig,
       });
-      const receipt = await tx.wait();
 
+      // ── 3. Instant feedback with Etherscan link ───────────────────────
+      const etherscanUrl = `https://sepolia.etherscan.io/tx/${txHash}`;
+      toast.success(
+        (t) => (
+          <span>
+            ✅ Transaction submitted!{" "}
+            <a href={etherscanUrl} target="_blank" rel="noreferrer"
+              style={{ color: "#7c3aed", fontWeight: 700 }}>
+              View on Etherscan →
+            </a>
+          </span>
+        ),
+        { duration: 12000, id: "tx-submitted" }
+      );
+
+      pendingToastId = toast.loading(
+        "⏳ Waiting for Sepolia confirmation... (15–60 sec)",
+        { id: "tx-pending" }
+      );
+
+      // ── 4. Wait for on-chain confirmation ─────────────────────────────
+      const receipt = await waitForTransactionReceipt(config, { hash: txHash });
+      toast.dismiss("tx-pending");
+
+      // ── 5. Parse tokenId from TicketMinted event ──────────────────────
       let tokenId;
       try {
         const iface = new ethers.utils.Interface(NFTS_AIRDROP_ABI);
         for (const log of receipt.logs) {
           try {
-            const parsed = iface.parseLog(log);
+            const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
             if (parsed.name === "TicketMinted") {
               tokenId = parsed.args.tokenId.toNumber();
               break;
@@ -329,9 +352,10 @@ export const StateContextProvider = ({ children }) => {
       } catch (e) { }
 
       setLoader(false);
-      notifySuccess("Ticket minted successfully!");
+      notifySuccess("🎟 Ticket minted! Check My Tickets to see your NFT.");
       return tokenId;
     } catch (error) {
+      toast.dismiss("tx-pending");
       setLoader(false);
       notifyError(parseErrorMsg(error) || "Failed to mint ticket");
       throw error;

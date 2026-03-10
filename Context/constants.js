@@ -111,43 +111,7 @@ export function toEth(amount, decimals = 18) {
   return toEth.toString();
 }
 
-// ── Map raw contract revert messages → friendly user messages ──────────────
-const ERROR_MAP = [
-  { match: /per-wallet ticket limit/i, msg: "🚫 You've already bought the maximum number of tickets allowed per wallet for this event." },
-  { match: /exceeds per-wallet/i, msg: "🚫 You've already bought the maximum number of tickets allowed per wallet for this event." },
-  { match: /sold out|max supply/i, msg: "😔 Sorry, this event is sold out." },
-  { match: /event (has )?ended|event is over/i, msg: "⏰ This event has already ended." },
-  { match: /insufficient funds/i, msg: "💸 Insufficient ETH in your wallet. Please top up and try again." },
-  { match: /user rejected|user denied|user cancelled/i, msg: "❌ Transaction cancelled by user." },
-  { match: /not organizer|only organizer/i, msg: "🔒 Only the event organizer can perform this action." },
-  { match: /not staked|not an organizer/i, msg: "🔒 You need to stake ETH as an organizer first." },
-  { match: /ticket (is )?used|already used/i, msg: "🎟 This ticket has already been used." },
-  { match: /not owner|not the owner/i, msg: "🔒 You don't own this ticket." },
-  { match: /invalid ticket|does not exist/i, msg: "❓ Ticket not found on this event." },
-];
-
 export function parseErrorMsg(e) {
-  // Deep-search multiple error fields for the revert reason
-  const json = (() => { try { return JSON.parse(JSON.stringify(e)); } catch { return {}; } })();
-
-  const raw =
-    json?.reason ||
-    json?.error?.reason ||
-    json?.error?.data?.message ||
-    json?.error?.message ||
-    json?.data?.message ||
-    json?.message ||
-    e?.reason ||
-    e?.message ||
-    "";
-
-  if (!raw) return null;
-
-  // Check against known friendly messages
-  for (const { match, msg } of ERROR_MAP) {
-    if (match.test(raw)) return msg;
-  }
-
-  // Strip "execution reverted:" prefix for cleaner display
-  return raw.replace(/^execution reverted:\s*/i, "").trim() || null;
+  const json = JSON.parse(JSON.stringify(e));
+  return json?.reason || json?.error?.message;
 }

@@ -2,9 +2,8 @@ import { providers } from "ethers";
 import { useMemo } from "react";
 import { useClient, useConnectorClient } from "wagmi";
 
-const FALLBACK_RPC = "https://ethereum-sepolia-rpc.publicnode.com";
+// ── Provider (read-only) ────────────────────────────────────────────────────
 
-// ── Read-only provider (no wallet needed) ────────────────────────────────────
 export function clientToProvider(client) {
   try {
     const { chain, transport } = client;
@@ -18,48 +17,77 @@ export function clientToProvider(client) {
       const urls = (transport.transports || [])
         .map(({ value }) => value?.url)
         .filter(Boolean);
-      return new providers.JsonRpcProvider(urls[0] || FALLBACK_RPC, network);
+      const rpc = urls[0] || "https://ethereum-sepolia-rpc.publicnode.com";
+      return new providers.JsonRpcProvider(rpc, network);
     }
 
-    const url = transport.url || FALLBACK_RPC;
+    const url = transport.url || "https://ethereum-sepolia-rpc.publicnode.com";
     return new providers.JsonRpcProvider(url, network);
   } catch {
-    return new providers.JsonRpcProvider(FALLBACK_RPC);
+    return new providers.JsonRpcProvider(
+      "https://ethereum-sepolia-rpc.publicnode.com"
+    );
   }
 }
 
 export function useEthersProvider({ chainId } = {}) {
   const client = useClient({ chainId });
-  return useMemo(() => (client ? clientToProvider(client) : undefined), [client]);
+  return useMemo(
+    () => (client ? clientToProvider(client) : undefined),
+    [client]
+  );
 }
 
-// ── Write signer — works for MetaMask AND WalletConnect on mobile ────────────
-//
-// Canonical wagmi v2 + ethers v5 approach (official docs):
-// useConnectorClient() gives us the WalletClient whose transport is always
-// an EIP-1193 provider — on MetaMask it wraps window.ethereum, on
-// WalletConnect it wraps the WC relay. We pass it directly to Web3Provider.
-//
-export function clientToSigner(walletClient) {
+// ── Signer (write) ──────────────────────────────────────────────────────────
+
+/**
+ * Converts a viem connector client to an ethers.js Signer.
+ *
+ * Priority:
+ * 1. Connector's own EIP-1193 provider from viem transport
+ *    → covers WalletConnect v2, Coinbase Wallet, injected (when viem exposes it)
+ * 2. window.ethereum
+ *    → covers MetaMask extension, mobile in-app browsers
+ */
+export function clientToSigner(client) {
   try {
-    const { account, chain, transport } = walletClient;
+    const { account, chain, transport } = client;
     const network = {
       chainId: chain.id,
       name: chain.name,
       ensAddress: chain.contracts?.ensRegistry?.address,
     };
-    const provider = new providers.Web3Provider(transport, network);
-    return provider.getSigner(account.address);
+
+    // ── 1. Try the connector's own EIP-1193 provider ──
+    // Works for WalletConnect v2, Coinbase Wallet, injected wallets via viem
+    const rawProvider =
+      transport?.provider ??
+      transport?.value?.provider ??
+      transport?.inner?.provider;
+
+    if (rawProvider && typeof rawProvider.request === "function") {
+      const provider = new providers.Web3Provider(rawProvider, network);
+      return provider.getSigner(account.address);
+    }
+
+    // ── 2. Fall back to window.ethereum ──
+    // Works for MetaMask extension, Trust Wallet, mobile in-app browsers
+    if (typeof window !== "undefined" && window.ethereum) {
+      const provider = new providers.Web3Provider(window.ethereum, network);
+      return provider.getSigner(account.address);
+    }
+
+    return undefined;
   } catch (err) {
-    console.warn("clientToSigner failed:", err?.message);
+    console.warn("[clientToSigner] Failed:", err.message);
     return undefined;
   }
 }
 
 export function useEthersSigner({ chainId } = {}) {
-  const { data: walletClient } = useConnectorClient({ chainId });
+  const { data: client } = useConnectorClient({ chainId });
   return useMemo(
-    () => (walletClient ? clientToSigner(walletClient) : undefined),
-    [walletClient]
+    () => (client ? clientToSigner(client) : undefined),
+    [client]
   );
 }

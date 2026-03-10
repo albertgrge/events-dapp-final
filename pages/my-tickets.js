@@ -144,20 +144,10 @@ export default function MyTicketsPage() {
 
     const generateSignedQRData = async (ticket) => {
         try {
-            // On mobile WalletConnect, signer may take a moment to initialize
-            let activeSigner = signer;
-            if (!activeSigner) {
-                await new Promise((r) => setTimeout(r, 1500));
-                activeSigner = signer;
-            }
-            if (!activeSigner) {
-                alert("Wallet not ready. Please make sure your wallet is connected, then try again.");
-                return null;
-            }
-
+            if (!signer) throw new Error("Wallet signer not available");
             const timestamp = Math.floor(Date.now() / 1000);
             const message = `Validate ticket ${ticket.tokenId} at ${timestamp}`;
-            const signature = await activeSigner.signMessage(message);
+            const signature = await signer.signMessage(message);
             const payload = {
                 tokenId: ticket.tokenId,
                 eventId: ticket.eventId,
@@ -168,12 +158,8 @@ export default function MyTicketsPage() {
             };
             return JSON.stringify(payload);
         } catch (e) {
-            console.error("QR signing error:", e);
-            if (e?.code === 4001 || e?.message?.includes("rejected")) {
-                alert("Signature rejected. Please approve the signing request in your wallet.");
-            } else {
-                alert("Signing failed: " + (e?.message || "Unknown error. Try reconnecting your wallet."));
-            }
+            console.error("Failed to sign QR data:", e);
+            alert("Signing failed: " + (e.message || "Unknown error"));
             return null;
         }
     };

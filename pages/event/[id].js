@@ -2,7 +2,10 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import { ethers } from "ethers";
+import toast from "react-hot-toast";
+import { useChainId, useBalance } from "wagmi";
 import { useStateContext } from "../../Context/index";
+import { useEthersSigner } from "../../provider/hooks";
 import Loader from "../../Components/Loader";
 import { useEthToInr } from "../../hooks/useEthToInr";
 import TransakWidget from "../../Components/TransakWidget";
@@ -22,6 +25,9 @@ export default function EventDetailPage() {
         loader,
     } = useStateContext();
     const { convertEthToInr, ethToInr } = useEthToInr();
+    const chainId = useChainId();
+    const { data: walletBalance } = useBalance({ address });
+    const signer = useEthersSigner();
 
     const [event, setEvent] = useState(null);
     const [organizer, setOrganizer] = useState(null);
@@ -58,7 +64,7 @@ export default function EventDetailPage() {
 
     const handleMint = async () => {
         if (!isConnected) {
-            alert("Please connect your wallet first.");
+            toast.error("Please connect your wallet first!");
             return;
         }
         if (!event) return;
@@ -66,33 +72,62 @@ export default function EventDetailPage() {
         try {
             setMinting(true);
 
-            // Try to build a tokenURI from IPFS; fall back to existing event metadataUrl
-            // so minting still works even if Pinata is not configured.
-            let tokenURI = event.metadataUrl || "";
-            try {
-                const metadata = {
-                    name: `${event.name} — Ticket`,
-                    description: `NFT Ticket for ${event.name}`,
-                    image: event.image || "",
-                    attributes: [
-                        { trait_type: "Event", value: event.name },
-                        { trait_type: "Date", value: new Date(event.date * 1000).toISOString() },
-                        { trait_type: "Price", value: `${event.ticketPrice} ETH` },
-                    ],
-                };
-                const uploaded = await uploadJSONToIPFS(metadata);
-                if (uploaded) tokenURI = uploaded;
-            } catch (ipfsErr) {
-                console.warn("IPFS upload skipped, using event metadataUrl:", ipfsErr?.message);
-                // tokenURI remains the event's existing metadataUrl
+            // ── 0. Signer sanity check ─────────────────────────────────────
+            if (!signer) {
+                toast.error("Wallet not ready — please disconnect and reconnect your wallet.");
+                setMinting(false);
+                return;
+            }
+            // ── 1. Check correct network (Sepolia = 11155111) ──────────────
+            if (chainId && chainId !== 11155111) {
+                toast.error("Please switch to Sepolia testnet to buy tickets!");
+                setMinting(false);
+                return;
             }
 
+            // ── 2. Check wallet balance ────────────────────────────────────
+            if (walletBalance) {
+                const balEth = parseFloat(ethers.utils.formatEther(walletBalance.value));
+                if (balEth < event.ticketPrice) {
+                    toast.error(`Insufficient balance. Need ${event.ticketPrice} ETH, you have ${balEth.toFixed(4)} ETH.`);
+                    setMinting(false);
+                    return;
+                }
+            }
+
+
+            // ── 3. Build ticket metadata ───────────────────────────────────
+            const metadata = {
+                name: `${event.name} — Ticket`,
+                description: `NFT Ticket for ${event.name}`,
+                image: event.image || "",
+                attributes: [
+                    { trait_type: "Event", value: event.name },
+                    { trait_type: "Date", value: new Date(event.date * 1000).toISOString() },
+                    { trait_type: "Price", value: `${event.ticketPrice} ETH` },
+                ],
+            };
+
+            // ── 4. Upload metadata (IPFS preferred, base64 fallback) ───────
+            let tokenURI;
+            try {
+                tokenURI = await uploadJSONToIPFS(metadata);
+            } catch (ipfsErr) {
+                // IPFS failed — use a base64 data URI so minting still works
+                console.warn("IPFS upload failed, using data URI fallback:", ipfsErr.message);
+                const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(metadata))));
+                tokenURI = `data:application/json;base64,${encoded}`;
+            }
+
+            // ── 5. Mint ───────────────────────────────────────────────────
             await MINT_TICKET(event.eventId, tokenURI);
             await loadEvent();
+            toast.success("🎟 Ticket minted successfully!");
         } catch (e) {
-            console.error("Mint error:", e);
-            // MINT_TICKET already shows a toast via notifyError,
-            // so we only need to surface unexpected errors here
+            console.error("Mint failed:", e);
+            // Show the exact revert reason so user knows what went wrong
+            const msg = e?.reason || e?.data?.message || e?.message || "Minting failed";
+            toast.error(msg.length > 80 ? msg.slice(0, 80) + "…" : msg);
         } finally {
             setMinting(false);
         }
