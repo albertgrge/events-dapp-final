@@ -15,6 +15,7 @@ export default function DashboardPage() {
         VALIDATE_TICKET,
         WITHDRAW_REVENUE,
         GET_PENDING_REVENUE,
+        GET_EVENT_STATS,
     } = useStateContext();
 
     const [events, setEvents] = useState([]);
@@ -22,6 +23,7 @@ export default function DashboardPage() {
     const [tokenIdInput, setTokenIdInput] = useState("");
     const [validationResults, setValidationResults] = useState([]);
     const [pendingRevenue, setPendingRevenue] = useState({});
+    const [eventStats, setEventStats] = useState({}); // { eventId: { totalRevenue, totalMinted... } }
     const [scannerActive, setScannerActive] = useState(false);
     const [scanResult, setScanResult] = useState(null);
     const scannerRef = useRef(null);
@@ -46,11 +48,20 @@ export default function DashboardPage() {
         );
         setEvents(myEvents);
 
+        // Fetch pending revenue + event stats in parallel for all events
+        const [revenueResults, statsResults] = await Promise.all([
+            Promise.all(myEvents.map(async (ev) => ({ id: ev.eventId, val: await GET_PENDING_REVENUE(ev.eventId) }))),
+            Promise.all(myEvents.map(async (ev) => ({ id: ev.eventId, val: await GET_EVENT_STATS(ev.eventId) }))),
+        ]);
+
         const revenues = {};
-        for (const ev of myEvents) {
-            revenues[ev.eventId] = await GET_PENDING_REVENUE(ev.eventId);
-        }
+        revenueResults.forEach(({ id, val }) => { revenues[id] = val; });
         setPendingRevenue(revenues);
+
+        const stats = {};
+        statsResults.forEach(({ id, val }) => { if (val) stats[id] = val; });
+        setEventStats(stats);
+
         setLoading(false);
     };
 
@@ -265,9 +276,11 @@ export default function DashboardPage() {
                                                 ></div>
                                             </div>
                                         </td>
-                                        <td>{ev.totalRevenue.toFixed(3)} ETH</td>
+                                        <td>
+                                            {parseFloat(eventStats[ev.eventId]?.totalRevenue || 0).toFixed(4)} ETH
+                                        </td>
                                         <td className="text-gradient font-bold">
-                                            {parseFloat(pendingRevenue[ev.eventId] || 0).toFixed(3)} ETH
+                                            {parseFloat(pendingRevenue[ev.eventId] || 0).toFixed(4)} ETH
                                         </td>
                                         <td>
                                             <button

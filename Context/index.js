@@ -10,8 +10,8 @@ import { useEthersProvider, useEthersSigner } from "../provider/hooks";
 const StateContext = createContext();
 
 export const StateContextProvider = ({ children }) => {
-  const notifySuccess = (msg) => toast.success(msg, { duration: 2000 });
-  const notifyError = (msg) => toast.error(msg, { duration: 2000 });
+  const notifySuccess = (msg) => toast.success(msg, { duration: 3000 });
+  const notifyError = (msg) => toast.error(msg, { duration: 5000 });
 
   const provider = useEthersProvider();
   const signer = useEthersSigner();
@@ -48,15 +48,6 @@ export const StateContextProvider = ({ children }) => {
     }
   }, [address, provider]);
 
-  useEffect(() => {
-    if (address) {
-      const timer = setTimeout(() => {
-        checkUserRole();
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [address]);
-
   const checkUserRole = async () => {
     try {
       if (!address || !provider) return;
@@ -68,24 +59,15 @@ export const StateContextProvider = ({ children }) => {
 
       try {
         isOrganizer = await contract.isActiveOrganizer(address);
-      } catch (e) {
-        console.log("isActiveOrganizer check failed:", e.message);
-      }
+      } catch { /* Not an organizer */ }
 
       try {
         const stakeWei = await contract.getOrganizerStake(address);
         stake = ethers.utils.formatEther(stakeWei);
-      } catch (e) {
-        console.log("getOrganizerStake check failed:", e.message);
-      }
+      } catch { /* No stake */ }
 
-      setUserRole({
-        isOrganizer,
-        isUser: !isOrganizer,
-      });
+      setUserRole({ isOrganizer, isUser: !isOrganizer });
       setOrganizerStake(stake);
-
-      console.log("Role set — isOrganizer:", isOrganizer, "stake:", stake, "ETH");
     } catch (error) {
       console.error("Error checking user role:", error);
     }
@@ -311,8 +293,18 @@ export const StateContextProvider = ({ children }) => {
   const MINT_TICKET = async (eventId, tokenURI) => {
     try {
       setLoader(true);
-      const contract = getWriteContract();
-      if (!contract) throw new Error("Wallet not connected");
+
+      // Guard: signer may take a moment to init on mobile WalletConnect
+      let contract = getWriteContract();
+      if (!contract) {
+        await new Promise((r) => setTimeout(r, 1500));
+        contract = getWriteContract();
+      }
+      if (!contract) {
+        setLoader(false);
+        notifyError("Wallet not ready — please reconnect and try again.");
+        throw new Error("Wallet not connected");
+      }
 
       const ev = await contract.events(eventId);
       const ticketPrice = ev.ticketPrice;

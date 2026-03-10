@@ -29,22 +29,27 @@ export default function MarketplacePage() {
         setLoading(true);
         try {
             const contract = new ethers.Contract(NFTS_AIRDROP_ADDRESS, NFTS_AIRDROP_ABI, provider);
-            const totalMinted = await contract.totalTicketsMinted();
+            const [totalMinted, allEvents] = await Promise.all([
+                contract.totalTicketsMinted(),
+                GET_ALL_EVENTS(),
+            ]);
             const total = totalMinted.toNumber();
 
-            const allEvents = await GET_ALL_EVENTS();
             const eventMap = {};
             allEvents.forEach((e) => { eventMap[e.eventId] = e; });
 
-            const activeListings = [];
-            for (let tokenId = 1; tokenId <= total; tokenId++) {
-                try {
-                    const listing = await contract.getResaleListing(tokenId);
-                    if (listing.active) {
+            if (total === 0) { setListings([]); setLoading(false); return; }
+
+            // Fetch all listings in parallel
+            const tokenIds = Array.from({ length: total }, (_, i) => i + 1);
+            const results = await Promise.all(
+                tokenIds.map(async (tokenId) => {
+                    try {
+                        const listing = await contract.getResaleListing(tokenId);
+                        if (!listing.active) return null;
                         const eventId = await contract.tokenToEvent(tokenId);
                         const ev = eventMap[eventId.toNumber()] || {};
-
-                        activeListings.push({
+                        return {
                             tokenId,
                             price: parseFloat(ethers.utils.formatEther(listing.price)),
                             priceWei: listing.price,
@@ -54,12 +59,12 @@ export default function MarketplacePage() {
                             originalPrice: ev.ticketPrice || 0,
                             royaltyBps: ev.royaltyBps || 0,
                             eventImage: ev.image || null,
-                        });
-                    }
-                } catch (e) { }
-            }
+                        };
+                    } catch { return null; }
+                })
+            );
 
-            setListings(activeListings);
+            setListings(results.filter(Boolean));
         } catch (error) {
             console.error("Error loading listings:", error);
         }

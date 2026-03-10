@@ -7,6 +7,25 @@ import { useStateContext } from "../Context/index";
 import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS } from "../Context/constants";
 import { useEthersProvider, useEthersSigner } from "../provider/hooks";
 import Loader from "../Components/Loader";
+import AttendanceCertificate from "../Components/AttendanceCertificate";
+
+/**
+ * Generates a visually complex ticket ID from the tokenId + owner address.
+ * e.g. tokenId=1, addr=0xABC... → "GCT-2025-7F3A4B2C"
+ * The actual tokenId is still used for all contract interactions.
+ */
+const formatTicketId = (tokenId, address = "") => {
+    try {
+        const hash = ethers.utils.keccak256(
+            ethers.utils.defaultAbiCoder.encode(["uint256", "address"], [tokenId, address || ethers.constants.AddressZero])
+        );
+        const hex = hash.slice(2, 10).toUpperCase(); // 8 hex chars
+        const year = new Date().getFullYear();
+        return `GCT-${year}-${hex}`;
+    } catch {
+        return `GCT-${String(tokenId).padStart(6, "0")}`;
+    }
+};
 
 export default function MyTicketsPage() {
     const {
@@ -15,7 +34,6 @@ export default function MyTicketsPage() {
         loader,
         LIST_FOR_RESALE,
         CANCEL_RESALE,
-        GET_TICKET_STATUS,
     } = useStateContext();
 
     const provider = useEthersProvider();
@@ -25,8 +43,8 @@ export default function MyTicketsPage() {
     const [loading, setLoading] = useState(true);
     const [resalePrice, setResalePrice] = useState("");
     const [selectedToken, setSelectedToken] = useState(null);
-    // New state for signed QR data
-    const [qrDataMap, setQrDataMap] = useState({}); // { tokenId: { qrString, expiresAt } }
+    const [qrDataMap, setQrDataMap] = useState({});
+    const [certTicket, setCertTicket] = useState(null); // ticket to show certificate for
 
     useEffect(() => {
         if (address && provider) loadTickets();
@@ -38,40 +56,64 @@ export default function MyTicketsPage() {
 
         try {
             const contract = new ethers.Contract(NFTS_AIRDROP_ADDRESS, NFTS_AIRDROP_ABI, provider);
-            const balance = await contract.balanceOf(address);
-            const count = balance.toNumber();
-
-            // Scan recent token IDs to find user's tokens
             const totalMinted = await contract.totalTicketsMinted();
             const total = totalMinted.toNumber();
 
-            const userTickets = [];
-            for (let tokenId = 1; tokenId <= total; tokenId++) {
-                try {
-                    const owner = await contract.ownerOf(tokenId);
-                    if (owner.toLowerCase() === address.toLowerCase()) {
-                        const status = await GET_TICKET_STATUS(tokenId);
-                        const eventId = await contract.tokenToEvent(tokenId);
-                        const ev = await contract.events(eventId);
-                        const tokenURI = await contract.tokenURI(tokenId);
+            if (total === 0) {
+                setTickets([]);
+                setLoading(false);
+                return;
+            }
 
-                        userTickets.push({
+            // Step 1: Fetch all owners in parallel
+            const tokenIds = Array.from({ length: total }, (_, i) => i + 1);
+            const ownerResults = await Promise.all(
+                tokenIds.map(async (tokenId) => {
+                    try {
+                        const owner = await contract.ownerOf(tokenId);
+                        return { tokenId, owner };
+                    } catch {
+                        return null;
+                    }
+                })
+            );
+
+            // Step 2: Filter only tokens owned by current user
+            const myTokenIds = ownerResults
+                .filter((r) => r && r.owner.toLowerCase() === address.toLowerCase())
+                .map((r) => r.tokenId);
+
+            // Step 3: Fetch ALL data per ticket in one parallel block (no GET_TICKET_STATUS overhead)
+            const userTickets = await Promise.all(
+                myTokenIds.map(async (tokenId) => {
+                    try {
+                        const [used, eventId, tokenURI, listing] = await Promise.all([
+                            contract.ticketUsed(tokenId),
+                            contract.tokenToEvent(tokenId),
+                            contract.tokenURI(tokenId),
+                            contract.getResaleListing(tokenId),
+                        ]);
+                        const ev = await contract.events(eventId);
+                        return {
                             tokenId,
                             eventId: eventId.toNumber(),
                             eventName: ev.name,
                             eventDate: ev.date.toNumber(),
-                            used: status?.used || false,
-                            listedForResale: status?.listedForResale || false,
-                            resalePrice: status?.resalePrice || null,
+                            ticketPrice: parseFloat(ethers.utils.formatEther(ev.ticketPrice)),
+                            used,
+                            listedForResale: listing.active || false,
+                            resalePrice: listing.active
+                                ? ethers.utils.formatEther(listing.price)
+                                : null,
                             tokenURI,
-                        });
+                        };
+                    } catch {
+                        return null;
                     }
-                } catch (e) {
-                    // Token may not exist or be burned
-                }
-            }
+                })
+            );
 
-            setTickets(userTickets);
+            setTickets(userTickets.filter(Boolean));
         } catch (error) {
             console.error("Error loading tickets:", error);
         }
@@ -102,10 +144,20 @@ export default function MyTicketsPage() {
 
     const generateSignedQRData = async (ticket) => {
         try {
-            if (!signer) throw new Error("Wallet signer not available");
+            // On mobile WalletConnect, signer may take a moment to initialize
+            let activeSigner = signer;
+            if (!activeSigner) {
+                await new Promise((r) => setTimeout(r, 1500));
+                activeSigner = signer;
+            }
+            if (!activeSigner) {
+                alert("Wallet not ready. Please make sure your wallet is connected, then try again.");
+                return null;
+            }
+
             const timestamp = Math.floor(Date.now() / 1000);
             const message = `Validate ticket ${ticket.tokenId} at ${timestamp}`;
-            const signature = await signer.signMessage(message);
+            const signature = await activeSigner.signMessage(message);
             const payload = {
                 tokenId: ticket.tokenId,
                 eventId: ticket.eventId,
@@ -116,8 +168,12 @@ export default function MyTicketsPage() {
             };
             return JSON.stringify(payload);
         } catch (e) {
-            console.error("Failed to sign QR data:", e);
-            alert("Signing failed: " + (e.message || "Unknown error"));
+            console.error("QR signing error:", e);
+            if (e?.code === 4001 || e?.message?.includes("rejected")) {
+                alert("Signature rejected. Please approve the signing request in your wallet.");
+            } else {
+                alert("Signing failed: " + (e?.message || "Unknown error. Try reconnecting your wallet."));
+            }
             return null;
         }
     };
@@ -138,6 +194,15 @@ export default function MyTicketsPage() {
             </Head>
 
             {loader && <Loader />}
+
+            {/* Attendance Certificate Modal */}
+            {certTicket && (
+                <AttendanceCertificate
+                    ticket={certTicket}
+                    address={address}
+                    onClose={() => setCertTicket(null)}
+                />
+            )}
 
             <div className="page container">
                 <div className="page-header">
@@ -188,11 +253,24 @@ export default function MyTicketsPage() {
                                     <div className="ticket-card-info">
                                         <h3 style={{ marginBottom: 4 }}>{ticket.eventName}</h3>
                                         <p className="text-muted text-sm">
-                                            📅 {new Date(ticket.eventDate * 1000).toLocaleDateString()} &bull; Token #{ticket.tokenId}
+                                            📅 {new Date(ticket.eventDate * 1000).toLocaleDateString()} &bull; <span style={{ fontFamily: "monospace", letterSpacing: "0.04em", fontSize: "0.8rem" }}>{formatTicketId(ticket.tokenId, address)}</span>
                                         </p>
-                                        <div style={{ marginTop: 8 }}>
+                                        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                                             {ticket.used ? (
-                                                <span className="badge badge-danger">Used</span>
+                                                <>
+                                                    <span className="badge badge-danger">Used</span>
+                                                    <button
+                                                        onClick={() => setCertTicket(ticket)}
+                                                        style={{
+                                                            padding: "4px 12px", fontSize: "0.75rem", fontWeight: 700,
+                                                            borderRadius: 20, cursor: "pointer",
+                                                            background: "linear-gradient(135deg,#7c3aed,#4f46e5)",
+                                                            border: "none", color: "white",
+                                                        }}
+                                                    >
+                                                        🏅 Claim Certificate
+                                                    </button>
+                                                </>
                                             ) : ticket.listedForResale ? (
                                                 <span className="badge badge-warning">Listed — {ticket.resalePrice} ETH</span>
                                             ) : (

@@ -427,7 +427,18 @@ export default function CreateEventPage() {
 
                                 <div className="form-group">
                                     <label className="form-label">Max Tickets Per Wallet</label>
-                                    <select name="maxPerWallet" className="form-input" value={form.maxPerWallet} onChange={handleChange}>
+                                    <select
+                                        name="maxPerWallet"
+                                        className="form-input"
+                                        value={form.maxPerWallet}
+                                        onChange={handleChange}
+                                        style={{
+                                            background: "#1a1a2e",
+                                            color: "#e2e8f0",
+                                            border: "1px solid rgba(255,255,255,0.15)",
+                                            cursor: "pointer",
+                                        }}
+                                    >
                                         <option value="0">Unlimited</option>
                                         <option value="1">1 ticket</option>
                                         <option value="2">2 tickets</option>
