@@ -3,8 +3,7 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { ethers } from "ethers";
 import { config } from "../Context/wagmiConfigs";
-import { writeContract, waitForTransactionReceipt } from "@wagmi/core";
-import { useAccount, useChains } from "wagmi";
+import { useAccount, useChains, useWalletClient } from "wagmi";
 import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS, parseErrorMsg } from "./constants";
 import { useEthersProvider, useEthersSigner } from "../provider/hooks";
 
@@ -17,6 +16,7 @@ export const StateContextProvider = ({ children }) => {
   const provider = useEthersProvider();
   const signer = useEthersSigner();
   const chains = useChains();
+  const { data: walletClient } = useWalletClient();   // viem wallet client — works for MetaMask + WalletConnect
 
   const [loader, setLoader] = useState(false);
   const [userRole, setUserRole] = useState({
@@ -296,53 +296,68 @@ export const StateContextProvider = ({ children }) => {
     try {
       setLoader(true);
 
-      // ── 1. Read ticket price (read-only, no wallet needed) ─────────────────
-      const readContract = getReadContract();
-      const ev = await readContract.events(eventId);
-      const ticketPriceBN = ev.ticketPrice;                      // ethers BigNumber
-      const ticketPriceBig = BigInt(ticketPriceBN.toString());   // viem BigInt
+      // ── Read ticket price (read-only, no signer needed) ───────────────────
+      const ev = await getReadContract().events(eventId);
+      const ticketPrice = ev.ticketPrice;  // ethers BigNumber
 
-      // ── 2. Send tx via wagmi (always routes through connected wallet) ────
-      // This triggers the MetaMask / WalletConnect popup.
-      const txHash = await writeContract(config, {
-        address: NFTS_AIRDROP_ADDRESS,
-        abi: NFTS_AIRDROP_ABI,
-        functionName: "mintTicket",
-        args: [BigInt(eventId), tokenURI],
-        value: ticketPriceBig,
-      });
+      let txHash;
 
-      // ── 3. Instant feedback with Etherscan link ───────────────────────
+      // ── Option A: wagmi walletClient (MetaMask + WalletConnect mobile) ──
+      if (walletClient) {
+        txHash = await walletClient.writeContract({
+          address: NFTS_AIRDROP_ADDRESS,
+          abi: NFTS_AIRDROP_ABI,
+          functionName: "mintTicket",
+          args: [BigInt(eventId), tokenURI],
+          value: BigInt(ticketPrice.toString()),
+          account: walletClient.account,
+          chain: walletClient.chain,
+        });
+      }
+      // ── Option B: window.ethereum fallback (desktop MetaMask only) ─────────
+      else if (typeof window !== "undefined" && window.ethereum) {
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        const web3 = new ethers.providers.Web3Provider(window.ethereum, "any");
+        const web3Signer = web3.getSigner();
+        const wc = new ethers.Contract(NFTS_AIRDROP_ADDRESS, NFTS_AIRDROP_ABI, web3Signer);
+        const tx = await wc.mintTicket(eventId, tokenURI, { value: ticketPrice });
+        txHash = tx.hash;
+      } else {
+        throw new Error("No wallet connected. Please connect your wallet.");
+      }
+
+      // ── Instant feedback ───────────────────────────────────────────────
       const etherscanUrl = `https://sepolia.etherscan.io/tx/${txHash}`;
       toast.success(
         (t) => (
           <span>
-            ✅ Transaction submitted!{" "}
+            ✅ Tx submitted!{" "}
             <a href={etherscanUrl} target="_blank" rel="noreferrer"
               style={{ color: "#7c3aed", fontWeight: 700 }}>
-              View on Etherscan →
+              Etherscan →
             </a>
           </span>
         ),
         { duration: 12000, id: "tx-submitted" }
       );
-
       pendingToastId = toast.loading(
-        "⏳ Waiting for Sepolia confirmation... (15–60 sec)",
+        "⏳ Waiting for Sepolia... (15–60 sec)",
         { id: "tx-pending" }
       );
 
-      // ── 4. Wait for on-chain confirmation ─────────────────────────────
-      const receipt = await waitForTransactionReceipt(config, { hash: txHash });
+      // ── Wait for on-chain confirmation ─────────────────────────────────
+      const readProvider = provider ||
+        new ethers.providers.JsonRpcProvider("https://ethereum-sepolia-rpc.publicnode.com");
+      const receipt = await readProvider.waitForTransaction(txHash);
       toast.dismiss("tx-pending");
 
-      // ── 5. Parse tokenId from TicketMinted event ──────────────────────
+      // ── Parse tokenId from TicketMinted event ────────────────────────────
       let tokenId;
       try {
         const iface = new ethers.utils.Interface(NFTS_AIRDROP_ABI);
         for (const log of receipt.logs) {
           try {
-            const parsed = iface.parseLog({ topics: [...log.topics], data: log.data });
+            const parsed = iface.parseLog(log);
             if (parsed.name === "TicketMinted") {
               tokenId = parsed.args.tokenId.toNumber();
               break;
@@ -352,7 +367,7 @@ export const StateContextProvider = ({ children }) => {
       } catch (e) { }
 
       setLoader(false);
-      notifySuccess("🎟 Ticket minted! Check My Tickets to see your NFT.");
+      notifySuccess("🎟 Ticket minted! Check My Tickets.");
       return tokenId;
     } catch (error) {
       toast.dismiss("tx-pending");

@@ -72,12 +72,13 @@ export default function EventDetailPage() {
         try {
             setMinting(true);
 
-            // ── 0. Signer sanity check ─────────────────────────────────────
-            if (!signer) {
-                toast.error("Wallet not ready — please disconnect and reconnect your wallet.");
+            // ── 0. Ensure wallet provider is available ─────────────────────
+            if (!window.ethereum && !isConnected) {
+                toast.error("No wallet detected. Please install MetaMask.");
                 setMinting(false);
                 return;
             }
+
             // ── 1. Check correct network (Sepolia = 11155111) ──────────────
             if (chainId && chainId !== 11155111) {
                 toast.error("Please switch to Sepolia testnet to buy tickets!");

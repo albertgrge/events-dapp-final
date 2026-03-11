@@ -2,7 +2,9 @@ import React, { useState, useEffect } from "react";
 import Head from "next/head";
 import Link from "next/link";
 import { ethers } from "ethers";
+import toast from "react-hot-toast";
 import { QRCodeCanvas } from "qrcode.react";
+import { useWalletClient } from "wagmi";
 import { useStateContext } from "../Context/index";
 import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS } from "../Context/constants";
 import { useEthersProvider, useEthersSigner } from "../provider/hooks";
@@ -38,6 +40,7 @@ export default function MyTicketsPage() {
 
     const provider = useEthersProvider();
     const signer = useEthersSigner();
+    const { data: walletClient } = useWalletClient();  // routes to MetaMask mobile or extension
     const [tickets, setTickets] = useState([]);
     const [activeTab, setActiveTab] = useState("active");
     const [loading, setLoading] = useState(true);
@@ -144,10 +147,29 @@ export default function MyTicketsPage() {
 
     const generateSignedQRData = async (ticket) => {
         try {
-            if (!signer) throw new Error("Wallet signer not available");
             const timestamp = Math.floor(Date.now() / 1000);
             const message = `Validate ticket ${ticket.tokenId} at ${timestamp}`;
-            const signature = await signer.signMessage(message);
+
+            let signature;
+
+            if (walletClient) {
+                // Works for WalletConnect (MetaMask mobile) AND MetaMask extension
+                signature = await walletClient.signMessage({
+                    account: walletClient.account,
+                    message,
+                });
+            } else if (typeof window !== "undefined" && window.ethereum) {
+                // Fallback: direct window.ethereum for desktop MetaMask
+                await window.ethereum.request({ method: "eth_requestAccounts" });
+                const web3 = new ethers.providers.Web3Provider(window.ethereum, "any");
+                const web3Signer = web3.getSigner();
+                signature = await web3Signer.signMessage(message);
+            } else if (signer) {
+                signature = await signer.signMessage(message);
+            } else {
+                throw new Error("No wallet connected. Please connect your wallet.");
+            }
+
             const payload = {
                 tokenId: ticket.tokenId,
                 eventId: ticket.eventId,
@@ -159,7 +181,7 @@ export default function MyTicketsPage() {
             return JSON.stringify(payload);
         } catch (e) {
             console.error("Failed to sign QR data:", e);
-            alert("Signing failed: " + (e.message || "Unknown error"));
+            toast.error("Signing failed: " + (e.reason || e.message || "Unknown error"));
             return null;
         }
     };
