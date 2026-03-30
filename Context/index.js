@@ -4,7 +4,7 @@ import toast from "react-hot-toast";
 import { ethers } from "ethers";
 import { config } from "../Context/wagmiConfigs";
 import { useAccount, useChains, useWalletClient } from "wagmi";
-import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS, parseErrorMsg } from "./constants";
+import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS, CONTRACT_DEPLOY_BLOCK, parseErrorMsg } from "./constants";
 import { useEthersProvider, useEthersSigner } from "../provider/hooks";
 
 const StateContext = createContext();
@@ -387,7 +387,9 @@ export const StateContextProvider = ({ children }) => {
       const contract = getWriteContract();
       if (!contract) throw new Error("Wallet not connected");
 
+      console.log("[VALIDATE_TICKET] calling validateTicket(", tokenId, ") with signer:", await contract.signer.getAddress());
       const tx = await contract.validateTicket(tokenId);
+      console.log("[VALIDATE_TICKET] tx sent:", tx.hash);
       await tx.wait();
 
       setLoader(false);
@@ -395,7 +397,19 @@ export const StateContextProvider = ({ children }) => {
       return true;
     } catch (error) {
       setLoader(false);
-      notifyError(parseErrorMsg(error) || "Validation failed");
+      console.error("[VALIDATE_TICKET] error:", error);
+
+      // Extract the most useful error message from any error shape
+      const reason =
+        error?.reason ||
+        error?.data?.message ||
+        error?.error?.message ||
+        error?.message ||
+        "Validation failed";
+
+      // Strip unhelpful viem prefix if present
+      const clean = reason.replace(/.*execution reverted:?\s*/i, "").trim() || reason;
+      notifyError(clean, { duration: 5000 });
       return false;
     }
   };
@@ -524,6 +538,82 @@ export const StateContextProvider = ({ children }) => {
     }
   };
 
+  const GET_EVENT_BUYERS = async (eventId) => {
+    try {
+      const contract = getReadContract();
+      if (!contract) return [];
+
+      const CHUNK = 40000; // stay under the 50 000-block RPC limit
+      const latestBlock = await contract.provider.getBlockNumber();
+
+      // Helper: fetch all logs for a filter in chunks
+      const fetchAllLogs = async (filter) => {
+        const logs = [];
+        for (let from = CONTRACT_DEPLOY_BLOCK; from <= latestBlock; from += CHUNK) {
+          const to = Math.min(from + CHUNK - 1, latestBlock);
+          try {
+            const chunk = await contract.queryFilter(filter, from, to);
+            logs.push(...chunk);
+          } catch (e) {
+            console.warn(`Skipping block range ${from}-${to}:`, e.message);
+          }
+        }
+        return logs;
+      };
+
+      // Fetch TicketMinted + TicketValidated + TicketResold logs in parallel
+      const [mintedLogs, validatedLogs, resoldLogs] = await Promise.all([
+        fetchAllLogs(contract.filters.TicketMinted(eventId)),
+        fetchAllLogs(contract.filters.TicketValidated(eventId)),
+        fetchAllLogs(contract.filters.TicketResold(eventId)),
+      ]);
+
+      // Build map of tokenId → resold buyer address
+      const resoldMap = {};
+      resoldLogs.forEach((log) => {
+        const tokenId = log.args.tokenId.toNumber();
+        resoldMap[tokenId] = log.args.buyer; // address of who bought the resale
+      });
+
+      // Build tokenId → check-in timestamp map from TicketValidated block times
+      const checkinMap = {};
+      await Promise.all(
+        validatedLogs.map(async (log) => {
+          const tokenId = log.args.tokenId.toNumber();
+          try {
+            const block = await contract.provider.getBlock(log.blockNumber);
+            checkinMap[tokenId] = block.timestamp; // Unix seconds
+          } catch (e) { }
+        })
+      );
+
+      // Enrich each minted entry with used status + check-in time
+      const buyers = await Promise.all(
+        mintedLogs.map(async (log) => {
+          const tokenId = log.args.tokenId.toNumber();
+          const buyer = log.args.buyer;
+          let used = false;
+          try {
+            used = await contract.ticketUsed(tokenId);
+          } catch (e) { }
+          return {
+            tokenId,
+            buyer,
+            used,
+            checkinTime: checkinMap[tokenId] || null,
+            resold: !!resoldMap[tokenId],
+            resoldTo: resoldMap[tokenId] || null,
+          };
+        })
+      );
+
+      return buyers;
+    } catch (e) {
+      console.error("Error fetching buyers:", e);
+      return [];
+    }
+  };
+
   const GET_EVENT_STATS = async (eventId) => {
     try {
       const contract = getReadContract();
@@ -648,6 +738,7 @@ export const StateContextProvider = ({ children }) => {
         // View
         GET_TICKET_STATUS,
         GET_EVENT_STATS,
+        GET_EVENT_BUYERS,
         GET_TOTAL_TICKETS_MINTED,
 
         // IPFS

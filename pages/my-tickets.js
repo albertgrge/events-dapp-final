@@ -47,7 +47,41 @@ export default function MyTicketsPage() {
     const [resalePrice, setResalePrice] = useState("");
     const [selectedToken, setSelectedToken] = useState(null);
     const [qrDataMap, setQrDataMap] = useState({});
-    const [certTicket, setCertTicket] = useState(null); // ticket to show certificate for
+    const [certTicket, setCertTicket] = useState(null);
+    const [feedbackMap, setFeedbackMap] = useState({});
+    const [feedbackOpen, setFeedbackOpen] = useState(null);
+    const [hoverRating, setHoverRating] = useState(0);
+    const [feedbackDraft, setFeedbackDraft] = useState({ rating: 0, comment: "" });
+
+    const feedbackKey = (eventId) => `feedback_${eventId}_${address?.toLowerCase()}`;
+
+    useEffect(() => {
+        if (!address || tickets.length === 0) return;
+        const loaded = {};
+        tickets.forEach((t) => {
+            try {
+                const raw = localStorage.getItem(feedbackKey(t.eventId));
+                if (raw) loaded[t.eventId] = JSON.parse(raw);
+            } catch (e) { }
+        });
+        setFeedbackMap(loaded);
+    }, [address, tickets]);
+
+    const openFeedback = (ticket) => {
+        const existing = feedbackMap[ticket.eventId];
+        setFeedbackDraft(existing ? { rating: existing.rating, comment: existing.comment } : { rating: 0, comment: "" });
+        setFeedbackOpen(ticket.tokenId);
+        setHoverRating(0);
+    };
+
+    const submitFeedback = (ticket) => {
+        if (feedbackDraft.rating === 0) return;
+        const entry = { rating: feedbackDraft.rating, comment: feedbackDraft.comment, eventName: ticket.eventName, submittedAt: Date.now() };
+        localStorage.setItem(feedbackKey(ticket.eventId), JSON.stringify(entry));
+        setFeedbackMap((prev) => ({ ...prev, [ticket.eventId]: entry }));
+        setFeedbackOpen(null);
+        toast.success("Thanks for your feedback! ⭐");
+    };
 
     useEffect(() => {
         if (address && provider) loadTickets();
@@ -181,7 +215,14 @@ export default function MyTicketsPage() {
             return JSON.stringify(payload);
         } catch (e) {
             console.error("Failed to sign QR data:", e);
-            toast.error("Signing failed: " + (e.reason || e.message || "Unknown error"));
+            const msg = e?.message || e?.details || "";
+            if (msg.toLowerCase().includes("expired") || msg.toLowerCase().includes("request expired")) {
+                toast.error("Request expired — open MetaMask and tap 'Show QR' again quickly.", { duration: 5000 });
+            } else if (msg.toLowerCase().includes("user rejected") || msg.toLowerCase().includes("denied")) {
+                toast.error("Signature rejected. Please approve in your wallet to generate the QR code.");
+            } else {
+                toast.error("Signing failed — please try again.");
+            }
             return null;
         }
     };
@@ -336,6 +377,60 @@ export default function MyTicketsPage() {
                                         <p style={{ fontFamily: "monospace", fontSize: "0.65rem", color: "var(--text-muted)", marginTop: 4 }}>
                                             Token #{ticket.tokenId} · Event #{ticket.eventId}
                                         </p>
+                                    </div>
+                                )}
+
+                                {/* Feedback — only for used tickets */}
+                                {ticket.used && (
+                                    <div style={{ marginTop: 16, padding: "16px 20px", background: "rgba(124,58,237,0.06)", borderRadius: "var(--radius-md)", border: "1px solid rgba(124,58,237,0.18)" }}>
+                                        {feedbackMap[ticket.eventId] ? (
+                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
+                                                <div>
+                                                    <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--primary)" }}>Your Feedback</span>
+                                                    <div style={{ marginTop: 4 }}>
+                                                        {[1, 2, 3, 4, 5].map((s) => (
+                                                            <span key={s} style={{ fontSize: "1.1rem", color: s <= feedbackMap[ticket.eventId].rating ? "#f59e0b" : "rgba(255,255,255,0.15)" }}>★</span>
+                                                        ))}
+                                                    </div>
+                                                    {feedbackMap[ticket.eventId].comment && (
+                                                        <p style={{ marginTop: 4, fontSize: "0.78rem", color: "var(--text-muted)", fontStyle: "italic" }}>\u201c{feedbackMap[ticket.eventId].comment}\u201d</p>
+                                                    )}
+                                                </div>
+                                                <button onClick={() => openFeedback(ticket)} style={{ background: "none", border: "1px solid rgba(124,58,237,0.3)", color: "var(--primary)", borderRadius: "var(--radius-sm)", padding: "3px 12px", fontSize: "0.74rem", cursor: "pointer" }}>Edit</button>
+                                            </div>
+                                        ) : feedbackOpen === ticket.tokenId ? (
+                                            <div>
+                                                <p style={{ fontWeight: 700, fontSize: "0.85rem", marginBottom: 10 }}>⭐ Rate your experience</p>
+                                                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                                                    {[1, 2, 3, 4, 5].map((s) => (
+                                                        <span
+                                                            key={s}
+                                                            onMouseEnter={() => setHoverRating(s)}
+                                                            onMouseLeave={() => setHoverRating(0)}
+                                                            onClick={() => setFeedbackDraft((p) => ({ ...p, rating: s }))}
+                                                            style={{ fontSize: "1.8rem", cursor: "pointer", transition: "transform 0.15s", transform: (hoverRating || feedbackDraft.rating) >= s ? "scale(1.25)" : "scale(1)", color: (hoverRating || feedbackDraft.rating) >= s ? "#f59e0b" : "rgba(255,255,255,0.18)" }}
+                                                        >★</span>
+                                                    ))}
+                                                </div>
+                                                <textarea
+                                                    rows={2}
+                                                    placeholder="Share your experience... (optional)"
+                                                    value={feedbackDraft.comment}
+                                                    onChange={(e) => setFeedbackDraft((p) => ({ ...p, comment: e.target.value }))}
+                                                    style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(124,58,237,0.3)", borderRadius: "var(--radius-sm)", color: "var(--text)", padding: "8px 12px", fontSize: "0.82rem", resize: "none", outline: "none", marginBottom: 10, boxSizing: "border-box" }}
+                                                />
+                                                <div style={{ display: "flex", gap: 8 }}>
+                                                    <button
+                                                        onClick={() => submitFeedback(ticket)}
+                                                        disabled={feedbackDraft.rating === 0}
+                                                        style={{ background: feedbackDraft.rating ? "linear-gradient(135deg,#7c3aed,#4f46e5)" : "rgba(124,58,237,0.2)", border: "none", color: "white", borderRadius: "var(--radius-sm)", padding: "6px 18px", fontSize: "0.82rem", fontWeight: 700, cursor: feedbackDraft.rating ? "pointer" : "not-allowed" }}
+                                                    >Submit</button>
+                                                    <button onClick={() => setFeedbackOpen(null)} style={{ background: "none", border: "1px solid rgba(255,255,255,0.15)", color: "var(--text-muted)", borderRadius: "var(--radius-sm)", padding: "6px 14px", fontSize: "0.82rem", cursor: "pointer" }}>Cancel</button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <button onClick={() => openFeedback(ticket)} style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)", border: "none", color: "white", borderRadius: "var(--radius-sm)", padding: "7px 18px", fontSize: "0.82rem", fontWeight: 700, cursor: "pointer" }}>⭐ Leave Feedback</button>
+                                        )}
                                     </div>
                                 )}
 

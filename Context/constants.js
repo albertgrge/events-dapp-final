@@ -8,6 +8,7 @@ const notifyError = (msg) => toast.error(msg, { duration: 2000 });
 
 export const NFTS_AIRDROP_ABI = EventTicketNFT;
 export const NFTS_AIRDROP_ADDRESS = process.env.NEXT_PUBLIC_NFTS_AIRDROP || "0xD4C2cCCF179AD4ecff76e5CaBDB22656ba0ebde2";
+export const CONTRACT_DEPLOY_BLOCK = 10403654; // block when contract was deployed on Sepolia
 export const CONTRACT_EXPLORER_URL = "https://sepolia.etherscan.io/address/0xD4C2cCCF179AD4ecff76e5CaBDB22656ba0ebde2";
 
 

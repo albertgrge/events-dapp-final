@@ -3,6 +3,7 @@ import Head from "next/head";
 import dynamic from "next/dynamic";
 import { ethers } from "ethers";
 import { useStateContext } from "../Context/index";
+import { NFTS_AIRDROP_ABI, NFTS_AIRDROP_ADDRESS } from "../Context/constants";
 import Loader from "../Components/Loader";
 
 export default function DashboardPage() {
@@ -16,6 +17,7 @@ export default function DashboardPage() {
         WITHDRAW_REVENUE,
         GET_PENDING_REVENUE,
         GET_EVENT_STATS,
+        GET_EVENT_BUYERS,
     } = useStateContext();
 
     const [events, setEvents] = useState([]);
@@ -28,6 +30,9 @@ export default function DashboardPage() {
     const [scanResult, setScanResult] = useState(null);
     const scannerRef = useRef(null);
     const html5QrCodeRef = useRef(null);
+    const [buyersMap, setBuyersMap] = useState({}); // { eventId: buyers[] }
+    const [expandedEvent, setExpandedEvent] = useState(null); // eventId currently expanded
+    const [buyersLoading, setBuyersLoading] = useState({});
 
     useEffect(() => {
         if (address) loadDashboard();
@@ -164,11 +169,26 @@ export default function DashboardPage() {
     const handleValidate = async () => {
         if (!tokenIdInput) return;
         const tokenId = parseInt(tokenIdInput);
+
+        // If scanned from QR — just verify the signature locally (no RPC needed)
+        if (scanResult?.signerAddress && scanResult?.signatureValid === false) {
+            // Unsigned QR — warn but allow
+            console.warn("Validating unsigned QR ticket");
+        }
+
+        // Call the contract directly — it enforces all rules on-chain
         const success = await VALIDATE_TICKET(tokenId);
         setValidationResults((prev) => [
-            { tokenId, success, time: new Date().toLocaleTimeString() },
+            {
+                tokenId,
+                success,
+                signerAddress: scanResult?.signerAddress,
+                reason: success ? "" : "Rejected by contract — check you're using the organizer wallet",
+                time: new Date().toLocaleTimeString(),
+            },
             ...prev.slice(0, 9),
         ]);
+
         setTokenIdInput("");
         setScanResult(null);
     };
@@ -176,6 +196,23 @@ export default function DashboardPage() {
     const handleWithdraw = async (eventId) => {
         const success = await WITHDRAW_REVENUE(eventId);
         if (success) await loadDashboard();
+    };
+
+    const handleViewBuyers = async (eventId) => {
+        if (expandedEvent === eventId) {
+            setExpandedEvent(null);
+            return;
+        }
+        setExpandedEvent(eventId);
+        if (buyersMap[eventId]) return; // already loaded
+        setBuyersLoading((prev) => ({ ...prev, [eventId]: true }));
+        const buyers = await GET_EVENT_BUYERS(eventId);
+        setBuyersMap((prev) => ({ ...prev, [eventId]: buyers }));
+        setBuyersLoading((prev) => ({ ...prev, [eventId]: false }));
+    };
+
+    const copyToClipboard = (text) => {
+        navigator.clipboard?.writeText(text);
     };
 
     // Totals
@@ -263,35 +300,257 @@ export default function DashboardPage() {
                             </thead>
                             <tbody>
                                 {events.map((ev) => (
-                                    <tr key={ev.eventId}>
-                                        <td style={{ fontWeight: 600 }}>{ev.name}</td>
-                                        <td>{new Date(ev.date * 1000).toLocaleDateString()}</td>
-                                        <td>{ev.ticketPrice} ETH</td>
-                                        <td>
-                                            {ev.ticketsMinted}/{ev.maxSupply}
-                                            <div className="progress-bar mt-2" style={{ width: 80 }}>
-                                                <div
-                                                    className="progress-fill"
-                                                    style={{ width: `${(ev.ticketsMinted / ev.maxSupply) * 100}%` }}
-                                                ></div>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            {parseFloat(eventStats[ev.eventId]?.totalRevenue || 0).toFixed(4)} ETH
-                                        </td>
-                                        <td className="text-gradient font-bold">
-                                            {parseFloat(pendingRevenue[ev.eventId] || 0).toFixed(4)} ETH
-                                        </td>
-                                        <td>
-                                            <button
-                                                className="btn btn-primary btn-sm"
-                                                onClick={() => handleWithdraw(ev.eventId)}
-                                                disabled={parseFloat(pendingRevenue[ev.eventId] || 0) === 0}
-                                            >
-                                                Withdraw
-                                            </button>
-                                        </td>
-                                    </tr>
+                                    <React.Fragment key={ev.eventId}>
+                                        <tr>
+                                            <td style={{ fontWeight: 600 }}>{ev.name}</td>
+                                            <td>{new Date(ev.date * 1000).toLocaleDateString()}</td>
+                                            <td>{ev.ticketPrice} ETH</td>
+                                            <td>
+                                                {ev.ticketsMinted}/{ev.maxSupply}
+                                                <div className="progress-bar mt-2" style={{ width: 80 }}>
+                                                    <div
+                                                        className="progress-fill"
+                                                        style={{ width: `${(ev.ticketsMinted / ev.maxSupply) * 100}%` }}
+                                                    ></div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                {parseFloat(eventStats[ev.eventId]?.totalRevenue || 0).toFixed(4)} ETH
+                                            </td>
+                                            <td className="text-gradient font-bold">
+                                                {parseFloat(pendingRevenue[ev.eventId] || 0).toFixed(4)} ETH
+                                            </td>
+                                            <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                                <button
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={() => handleWithdraw(ev.eventId)}
+                                                    disabled={parseFloat(pendingRevenue[ev.eventId] || 0) === 0}
+                                                >
+                                                    Withdraw
+                                                </button>
+                                                <button
+                                                    className="btn btn-sm"
+                                                    style={{
+                                                        background: expandedEvent === ev.eventId
+                                                            ? "rgba(124,58,237,0.25)"
+                                                            : "rgba(124,58,237,0.1)",
+                                                        border: "1px solid rgba(124,58,237,0.4)",
+                                                        color: "var(--primary)",
+                                                        borderRadius: "var(--radius-sm)",
+                                                        cursor: "pointer",
+                                                        padding: "4px 10px",
+                                                        fontSize: "0.78rem",
+                                                        fontWeight: 600,
+                                                    }}
+                                                    onClick={() => handleViewBuyers(ev.eventId)}
+                                                >
+                                                    {expandedEvent === ev.eventId ? "▲ Hide" : "👥 Buyers"}
+                                                </button>
+                                            </td>
+                                        </tr>
+
+                                        {/* Buyers expandable panel */}
+                                        {expandedEvent === ev.eventId && (
+                                            <tr>
+                                                <td colSpan={7} style={{ padding: 0 }}>
+                                                    <div style={{
+                                                        background: "rgba(124,58,237,0.05)",
+                                                        borderTop: "1px solid rgba(124,58,237,0.15)",
+                                                        borderBottom: "1px solid rgba(124,58,237,0.15)",
+                                                        padding: "20px 24px",
+                                                    }}>
+                                                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                                                            <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>👥 Ticket Buyers — {ev.name}</span>
+                                                            <span style={{
+                                                                background: "rgba(124,58,237,0.15)",
+                                                                color: "var(--primary)",
+                                                                borderRadius: 20,
+                                                                padding: "2px 10px",
+                                                                fontSize: "0.75rem",
+                                                                fontWeight: 700,
+                                                            }}>
+                                                                {buyersLoading[ev.eventId] ? "…" : (buyersMap[ev.eventId]?.length ?? 0)} buyers
+                                                            </span>
+                                                        </div>
+
+                                                        {/* Feedback Visualization */}
+                                                        {!buyersLoading[ev.eventId] && buyersMap[ev.eventId]?.length > 0 && (() => {
+                                                            const allFb = (buyersMap[ev.eventId] || []).map((b) => {
+                                                                try {
+                                                                    const raw = localStorage.getItem(`feedback_${ev.eventId}_${b.buyer.toLowerCase()}`);
+                                                                    return raw ? JSON.parse(raw) : null;
+                                                                } catch (e) { return null; }
+                                                            }).filter(Boolean);
+
+                                                            if (allFb.length === 0) return null;
+
+                                                            const avg = (allFb.reduce((s, f) => s + f.rating, 0) / allFb.length);
+                                                            const counts = [5, 4, 3, 2, 1].map((star) => ({ star, count: allFb.filter(f => f.rating === star).length }));
+
+                                                            return (
+                                                                <div style={{
+                                                                    background: "rgba(124,58,237,0.08)",
+                                                                    border: "1px solid rgba(124,58,237,0.2)",
+                                                                    borderRadius: "var(--radius-md)",
+                                                                    padding: "16px 20px",
+                                                                    marginBottom: 18,
+                                                                    display: "flex",
+                                                                    gap: 28,
+                                                                    alignItems: "center",
+                                                                    flexWrap: "wrap",
+                                                                }}>
+                                                                    {/* Big average score */}
+                                                                    <div style={{ textAlign: "center", minWidth: 80 }}>
+                                                                        <div style={{ fontSize: "2.4rem", fontWeight: 800, color: "#f59e0b", lineHeight: 1 }}>{avg.toFixed(1)}</div>
+                                                                        <div style={{ display: "flex", justifyContent: "center", gap: 2, margin: "6px 0 4px" }}>
+                                                                            {[1, 2, 3, 4, 5].map((s) => (
+                                                                                <span key={s} style={{ fontSize: "1rem", color: s <= Math.round(avg) ? "#f59e0b" : "rgba(255,255,255,0.15)" }}>★</span>
+                                                                            ))}
+                                                                        </div>
+                                                                        <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{allFb.length} review{allFb.length !== 1 ? "s" : ""}</div>
+                                                                    </div>
+
+                                                                    {/* Bar chart */}
+                                                                    <div style={{ flex: 1, minWidth: 180 }}>
+                                                                        {counts.map(({ star, count }) => (
+                                                                            <div key={star} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                                                                <span style={{ fontSize: "0.75rem", color: "#f59e0b", minWidth: 14, textAlign: "right" }}>{star}</span>
+                                                                                <span style={{ fontSize: "0.75rem", color: "#f59e0b" }}>★</span>
+                                                                                <div style={{ flex: 1, background: "rgba(255,255,255,0.08)", borderRadius: 6, height: 10, overflow: "hidden" }}>
+                                                                                    <div style={{
+                                                                                        width: allFb.length ? `${(count / allFb.length) * 100}%` : "0%",
+                                                                                        height: "100%",
+                                                                                        background: "linear-gradient(90deg,#f59e0b,#fcd34d)",
+                                                                                        borderRadius: 6,
+                                                                                        transition: "width 0.6s ease",
+                                                                                    }} />
+                                                                                </div>
+                                                                                <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", minWidth: 18 }}>{count}</span>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })()}
+
+                                                        {buyersLoading[ev.eventId] ? (
+                                                            <div style={{ textAlign: "center", padding: 24 }}>
+                                                                <div className="spinner" style={{ margin: "0 auto" }}></div>
+                                                                <p className="text-muted text-sm" style={{ marginTop: 8 }}>Loading buyers from blockchain…</p>
+                                                            </div>
+                                                        ) : buyersMap[ev.eventId]?.length === 0 ? (
+                                                            <p className="text-muted text-sm">No tickets sold yet for this event.</p>
+                                                        ) : (
+                                                            <div style={{ overflowX: "auto" }}>
+                                                                <table className="table" style={{ fontSize: "0.82rem" }}>
+                                                                    <thead>
+                                                                        <tr>
+                                                                            <th style={{ width: 70 }}>Token ID</th>
+                                                                            <th>Wallet Address</th>
+                                                                            <th style={{ width: 100 }}>Status</th>
+                                                                            <th style={{ width: 160 }}>Check-in Time</th>
+                                                                            <th style={{ width: 80 }}>Resold</th>
+                                                                            <th style={{ width: 160 }}>Feedback</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        {buyersMap[ev.eventId].map((b) => (
+                                                                            <tr key={b.tokenId}>
+                                                                                <td><span style={{ fontWeight: 700 }}>#{b.tokenId}</span></td>
+                                                                                <td>
+                                                                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                                                                        <span style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                                                                                            {b.buyer.slice(0, 6)}...{b.buyer.slice(-4)}
+                                                                                        </span>
+                                                                                        <button
+                                                                                            title="Copy full address"
+                                                                                            onClick={() => copyToClipboard(b.buyer)}
+                                                                                            style={{
+                                                                                                background: "none",
+                                                                                                border: "none",
+                                                                                                cursor: "pointer",
+                                                                                                color: "var(--text-muted)",
+                                                                                                padding: 2,
+                                                                                                fontSize: "0.85rem",
+                                                                                            }}
+                                                                                        >📋</button>
+                                                                                        <a
+                                                                                            href={`https://sepolia.etherscan.io/address/${b.buyer}`}
+                                                                                            target="_blank"
+                                                                                            rel="noreferrer"
+                                                                                            style={{ color: "var(--primary)", fontSize: "0.75rem" }}
+                                                                                        >↗</a>
+                                                                                    </div>
+                                                                                </td>
+                                                                                <td>
+                                                                                    {b.used ? (
+                                                                                        <span style={{ color: "var(--success)", fontWeight: 600 }}>✅ Used</span>
+                                                                                    ) : (
+                                                                                        <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>🎫 Unused</span>
+                                                                                    )}
+                                                                                </td>
+                                                                                <td style={{ fontSize: "0.78rem", color: b.checkinTime ? "var(--text)" : "var(--text-muted)" }}>
+                                                                                    {b.checkinTime
+                                                                                        ? new Date(b.checkinTime * 1000).toLocaleString()
+                                                                                        : "—"}
+                                                                                </td>
+                                                                                <td>
+                                                                                    {b.resold ? (
+                                                                                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                                                                            <span style={{ color: "#f59e0b", fontWeight: 600, marginRight: 2 }}>🔄</span>
+                                                                                            <span style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#f59e0b" }}>
+                                                                                                {b.resoldTo.slice(0, 6)}...{b.resoldTo.slice(-4)}
+                                                                                            </span>
+                                                                                            <button
+                                                                                                title="Copy resold buyer address"
+                                                                                                onClick={() => copyToClipboard(b.resoldTo)}
+                                                                                                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: 2, fontSize: "0.8rem" }}
+                                                                                            >📋</button>
+                                                                                            <a
+                                                                                                href={`https://sepolia.etherscan.io/address/${b.resoldTo}`}
+                                                                                                target="_blank"
+                                                                                                rel="noreferrer"
+                                                                                                style={{ color: "#f59e0b", fontSize: "0.72rem" }}
+                                                                                            >↗</a>
+                                                                                        </div>
+                                                                                    ) : (
+                                                                                        <span style={{ color: "var(--text-muted)", fontWeight: 500 }}>No</span>
+                                                                                    )}
+                                                                                </td>
+                                                                                <td>
+                                                                                    {(() => {
+                                                                                        let fb = null;
+                                                                                        try {
+                                                                                            const raw = localStorage.getItem(`feedback_${ev.eventId}_${b.buyer.toLowerCase()}`);
+                                                                                            if (raw) fb = JSON.parse(raw);
+                                                                                        } catch (e) { }
+                                                                                        if (!fb) return <span style={{ color: "var(--text-muted)" }}>—</span>;
+                                                                                        return (
+                                                                                            <div>
+                                                                                                <div style={{ display: "flex", gap: 1 }}>
+                                                                                                    {[1, 2, 3, 4, 5].map((s) => (
+                                                                                                        <span key={s} style={{ fontSize: "0.9rem", color: s <= fb.rating ? "#f59e0b" : "rgba(255,255,255,0.15)" }}>★</span>
+                                                                                                    ))}
+                                                                                                </div>
+                                                                                                {fb.comment && (
+                                                                                                    <p style={{ margin: "2px 0 0", fontSize: "0.72rem", color: "var(--text-muted)", fontStyle: "italic", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                                                                                        title={fb.comment}>“{fb.comment}”</p>
+                                                                                                )}
+                                                                                            </div>
+                                                                                        );
+                                                                                    })()}
+                                                                                </td>
+                                                                            </tr>
+                                                                        ))}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
                                 ))}
                             </tbody>
                         </table>
@@ -300,6 +559,45 @@ export default function DashboardPage() {
 
                 {/* Validate Tickets */}
                 <h2 style={{ marginBottom: 16 }}>Validate Tickets</h2>
+
+                {/* Wallet sanity check — contract requires msg.sender == event organizer */}
+                {events.length > 0 && (() => {
+                    const mismatch = events.some(
+                        (ev) => ev.organizer.toLowerCase() !== address?.toLowerCase()
+                    );
+                    // All events show current address as organizer (they were filtered to this wallet already)
+                    // Mismatch means address changed after load — warn the user
+                    if (address && events[0]?.organizer.toLowerCase() !== address.toLowerCase()) {
+                        return (
+                            <div style={{
+                                background: "rgba(239,68,68,0.12)",
+                                border: "1px solid rgba(239,68,68,0.4)",
+                                borderRadius: "var(--radius-md)",
+                                padding: "14px 18px",
+                                marginBottom: 20,
+                                display: "flex",
+                                alignItems: "flex-start",
+                                gap: 12,
+                            }}>
+                                <span style={{ fontSize: "1.3rem" }}>⚠️</span>
+                                <div style={{ fontSize: "0.85rem" }}>
+                                    <strong style={{ color: "#ef4444" }}>Wrong wallet connected</strong>
+                                    <p style={{ margin: "4px 0 0", color: "var(--text-muted)" }}>
+                                        The contract requires the <em>event organizer</em> wallet to call validateTicket.
+                                    </p>
+                                    <p style={{ margin: "6px 0 0", fontFamily: "monospace", fontSize: "0.78rem" }}>
+                                        Expected: <strong style={{ color: "#f59e0b" }}>{events[0]?.organizer.slice(0,10)}…{events[0]?.organizer.slice(-6)}</strong>
+                                    </p>
+                                    <p style={{ margin: "2px 0 0", fontFamily: "monospace", fontSize: "0.78rem" }}>
+                                        Connected: <strong style={{ color: "#ef4444" }}>{address?.slice(0,10)}…{address?.slice(-6)}</strong>
+                                    </p>
+                                </div>
+                            </div>
+                        );
+                    }
+                    return null;
+                })()}
+
                 <div className="responsive-grid-2col">
                     {/* QR Scanner + Manual Entry */}
                     <div className="card-glass" style={{ padding: 32 }}>
@@ -424,9 +722,14 @@ export default function DashboardPage() {
                                         }}
                                     >
                                         <span style={{ fontWeight: 600 }}>Token #{r.tokenId}</span>
-                                        <span style={{ color: r.success ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
-                                            {r.success ? "✅ Valid" : "❌ Failed"}
-                                        </span>
+                                        <div style={{ textAlign: "right" }}>
+                                            <span style={{ color: r.success ? "var(--success)" : "var(--danger)", fontWeight: 600, display: "block" }}>
+                                                {r.success ? "✅ Valid" : "❌ Failed"}
+                                            </span>
+                                            {!r.success && r.reason && (
+                                                <span style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>{r.reason}</span>
+                                            )}
+                                        </div>
                                         <span className="text-muted text-sm">{r.time}</span>
                                     </div>
                                 ))}
