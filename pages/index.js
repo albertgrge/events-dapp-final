@@ -563,6 +563,133 @@ export default function Home() {
                     line-height: 1.5;
                 }
 
+                /* ── Video Tutorial Section ─── */
+                .video-section {
+                    position: relative;
+                    z-index: 2;
+                    padding: 80px 0;
+                }
+
+                .video-wrapper {
+                    position: relative;
+                    max-width: 820px;
+                    margin: 0 auto;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    background: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(124, 58, 237, 0.2);
+                    box-shadow:
+                        0 0 60px rgba(124, 58, 237, 0.08),
+                        0 20px 60px rgba(0, 0, 0, 0.3);
+                    transition: all 0.4s ease;
+                }
+
+                .video-wrapper:hover {
+                    border-color: rgba(124, 58, 237, 0.4);
+                    box-shadow:
+                        0 0 80px rgba(124, 58, 237, 0.15),
+                        0 25px 80px rgba(0, 0, 0, 0.4);
+                    transform: translateY(-4px);
+                }
+
+                .video-wrapper::before {
+                    content: '';
+                    position: absolute;
+                    inset: -1px;
+                    border-radius: 21px;
+                    padding: 1px;
+                    background: linear-gradient(135deg, rgba(124, 58, 237, 0.4), transparent 40%, transparent 60%, rgba(59, 130, 246, 0.4));
+                    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+                    -webkit-mask-composite: xor;
+                    mask-composite: exclude;
+                    pointer-events: none;
+                    z-index: 1;
+                }
+
+                .video-embed {
+                    position: relative;
+                    padding-bottom: 56.25%; /* 16:9 aspect ratio */
+                    height: 0;
+                    overflow: hidden;
+                }
+
+                .video-embed iframe {
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    border: none;
+                }
+
+                .video-info {
+                    display: flex;
+                    align-items: center;
+                    gap: 16px;
+                    padding: 20px 28px;
+                    background: rgba(124, 58, 237, 0.05);
+                    border-top: 1px solid rgba(124, 58, 237, 0.1);
+                }
+
+                .video-info-icon {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 12px;
+                    background: linear-gradient(135deg, #f6851b, #e2761b);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 1.3rem;
+                    flex-shrink: 0;
+                }
+
+                .video-info-text h4 {
+                    font-size: 0.95rem;
+                    font-weight: 600;
+                    margin-bottom: 2px;
+                    color: rgba(255, 255, 255, 0.9);
+                }
+
+                .video-info-text p {
+                    font-size: 0.8rem;
+                    color: rgba(255, 255, 255, 0.45);
+                }
+
+                .video-tips {
+                    display: grid;
+                    grid-template-columns: repeat(3, 1fr);
+                    gap: 16px;
+                    max-width: 820px;
+                    margin: 24px auto 0;
+                }
+
+                .video-tip {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 14px 18px;
+                    background: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 12px;
+                    transition: all 0.3s;
+                }
+
+                .video-tip:hover {
+                    border-color: rgba(124, 58, 237, 0.25);
+                    background: rgba(124, 58, 237, 0.05);
+                }
+
+                .video-tip-icon {
+                    font-size: 1.3rem;
+                    flex-shrink: 0;
+                }
+
+                .video-tip-text {
+                    font-size: 0.82rem;
+                    color: rgba(255, 255, 255, 0.6);
+                    line-height: 1.4;
+                }
+
                 @media (max-width: 768px) {
                     .hero-title-3d { font-size: 3rem; }
                     .hero-title-3d .line-3 { font-size: 2rem; }
@@ -571,6 +698,8 @@ export default function Home() {
                     .steps-grid { grid-template-columns: repeat(2, 1fr); }
                     .cta-card { padding: 40px 24px; }
                     .cta-title { font-size: 1.8rem; }
+                    .video-tips { grid-template-columns: 1fr; }
+                    .video-info { padding: 16px 20px; }
                 }
             `}</style>
 
@@ -672,6 +801,53 @@ export default function Home() {
               <div className="step-number">4</div>
               <h4 className="step-title">Earn & Analyze</h4>
               <p className="step-desc">Withdraw revenue & track analytics in real-time dashboard.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* MetaMask Tutorial Video */}
+      <section className="video-section">
+        <div className="container" style={{ textAlign: "center" }}>
+          <div className="section-label">Get Started</div>
+          <h2 className="section-title">
+            Setup Your <span className="text-gradient">MetaMask Wallet</span>
+          </h2>
+          <p className="text-muted mb-8" style={{ maxWidth: 540, margin: "0 auto 40px" }}>
+            New to Web3? Watch this quick tutorial to set up your MetaMask wallet
+            and start buying NFT tickets in minutes.
+          </p>
+
+          <div className="video-wrapper">
+            <div className="video-embed">
+              <iframe
+                src="https://www.youtube.com/embed/bN5LZQMuS1U"
+                title="How to Setup Metamask Wallet | Metamask Wallet Tutorial Malayalam"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+            <div className="video-info">
+              <div className="video-info-icon">🦊</div>
+              <div className="video-info-text">
+                <h4>How to Setup Metamask Wallet | Tutorial Malayalam</h4>
+                <p>Learn to install, configure, and secure your MetaMask wallet step by step</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="video-tips">
+            <div className="video-tip">
+              <span className="video-tip-icon">📥</span>
+              <span className="video-tip-text">Install MetaMask extension from the official Chrome Web Store</span>
+            </div>
+            <div className="video-tip">
+              <span className="video-tip-icon">🔑</span>
+              <span className="video-tip-text">Save your 12-word secret recovery phrase securely offline</span>
+            </div>
+            <div className="video-tip">
+              <span className="video-tip-icon">🔗</span>
+              <span className="video-tip-text">Connect to Sepolia testnet to start using this dApp</span>
             </div>
           </div>
         </div>
